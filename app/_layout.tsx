@@ -1,6 +1,7 @@
 import { Stack } from 'expo-router';
 import 'react-native-reanimated';
 
+import { AppErrorBoundary } from '@/components/shell/app-error-boundary';
 import { colors } from '@/constants/tokens';
 import BootstrapScreen from '@/features/auth/screens/bootstrap-screen';
 import { CaptureSessionProvider } from '@/features/capture/capture-session';
@@ -56,8 +57,10 @@ function RootNavigator() {
 
 export default function RootLayout() {
   return (
-    <AppProviders>
-      <RootNavigator />
-    </AppProviders>
+    <AppErrorBoundary>
+      <AppProviders>
+        <RootNavigator />
+      </AppProviders>
+    </AppErrorBoundary>
   );
 }
