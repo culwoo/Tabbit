@@ -13,6 +13,7 @@ type AppSessionContextValue = {
   bootstrapState: AppBootstrapState;
   session: Session | null;
   user: User | null;
+  userId: string | null;
   isConfigured: boolean;
   isAuthenticating: boolean;
   authError: string | null;
@@ -142,6 +143,7 @@ export function AppSessionProvider({ children }: PropsWithChildren) {
     bootstrapState,
     session,
     user: session?.user ?? null,
+    userId: session?.user?.id ?? null,
     isConfigured: env.hasSupabaseConfig,
     isAuthenticating,
     authError,
