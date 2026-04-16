@@ -1,24 +1,63 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { colors } from '@/constants/tokens';
+import BootstrapScreen from '@/features/auth/screens/bootstrap-screen';
+import { CaptureSessionProvider } from '@/features/capture/capture-session';
+import { AppProviders } from '@/providers/app-providers';
+import { useAppSession } from '@/providers/app-session-provider';
 
-export const unstable_settings = {
-  anchor: '(tabs)',
-};
+const stackScreenOptions = {
+  contentStyle: { backgroundColor: colors.bg.canvas },
+  headerShown: false,
+} as const;
 
-export default function RootLayout() {
-  const colorScheme = useColorScheme();
+function RootNavigator() {
+  const { bootstrapState } = useAppSession();
+
+  if (bootstrapState === 'checking') {
+    return <BootstrapScreen />;
+  }
+
+  if (bootstrapState === 'signed-out') {
+    return (
+      <Stack screenOptions={stackScreenOptions}>
+        <Stack.Screen name="index" />
+        <Stack.Screen name="(auth)" />
+      </Stack>
+    );
+  }
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+    <CaptureSessionProvider>
+      <Stack screenOptions={stackScreenOptions}>
+        <Stack.Screen name="index" />
+          <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="personal/index" />
+          <Stack.Screen name="groups/[groupId]" />
+          <Stack.Screen name="groups/chat/[groupId]" />
+          <Stack.Screen name="capture/index" />
+          <Stack.Screen name="capture/share" />
+          <Stack.Screen name="calendar/[date]" />
+          <Stack.Screen name="notifications" />
+          <Stack.Screen name="profile" />
+          <Stack.Screen
+            name="group-actions"
+            options={{
+              animation: 'fade',
+              contentStyle: { backgroundColor: 'transparent' },
+              presentation: 'transparentModal',
+            }}
+          />
       </Stack>
-      <StatusBar style="auto" />
-    </ThemeProvider>
+    </CaptureSessionProvider>
+  );
+}
+
+export default function RootLayout() {
+  return (
+    <AppProviders>
+      <RootNavigator />
+    </AppProviders>
   );
 }

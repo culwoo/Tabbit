@@ -1,35 +1,23 @@
 import { Tabs } from 'expo-router';
-import React from 'react';
 
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { BottomPillTabBar } from '@/components/shell/bottom-pill-tab-bar';
+import { colors } from '@/constants/tokens';
+
+export const unstable_settings = {
+  initialRouteName: 'index',
+};
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
         headerShown: false,
-        tabBarButton: HapticTab,
-      }}>
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="explore"
-        options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
-        }}
-      />
+        sceneStyle: { backgroundColor: colors.bg.canvas },
+      }}
+      tabBar={(props) => <BottomPillTabBar {...props} />}>
+      <Tabs.Screen name="calendar" options={{ title: '캘린더' }} />
+      <Tabs.Screen name="index" options={{ title: '홈' }} />
+      <Tabs.Screen name="camera" options={{ title: '카메라' }} />
     </Tabs>
   );
 }
