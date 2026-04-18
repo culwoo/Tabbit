@@ -9,7 +9,7 @@ type TagPillProps = {
 };
 
 export function TagPill({ selected = false, label, overflowCount }: TagPillProps) {
-  const content = overflowCount && overflowCount > 0 ? `... +${overflowCount}개` : label;
+  const content = overflowCount && overflowCount > 0 ? `외 ${overflowCount}개` : label;
 
   return (
     <View style={[styles.base, selected ? styles.selected : styles.default]}>
@@ -26,17 +26,17 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     borderWidth: 1,
     justifyContent: 'center',
-    minHeight: 32,
+    minHeight: 34,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
   default: {
-    backgroundColor: colors.surface.primary,
+    backgroundColor: colors.surface.raised,
     borderColor: colors.line.soft,
   },
   selected: {
-    backgroundColor: colors.brand.primarySoft,
-    borderColor: colors.brand.primary,
+    backgroundColor: colors.brand.butterSoft,
+    borderColor: colors.brand.accent,
   },
   label: {
     fontSize: typography.label.fontSize,

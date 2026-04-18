@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -21,7 +21,7 @@ import { useIsFocused } from '@react-navigation/native';
 import { AppHeader } from '@/components/shell/app-header';
 import { AppButton } from '@/components/ui/app-button';
 import { useCaptureSession } from '@/features/capture/capture-session';
-import type { MediaSource } from '@/features/capture/types';
+import type { MediaSource, UploadProgressPhase } from '@/features/capture/types';
 import { useAppColors } from '@/hooks/use-app-colors';
 import { formatLifeDayLabel, formatTimestampLabel } from '@/lib/life-day';
 
@@ -29,6 +29,17 @@ const sourceLabels: Record<MediaSource, string> = {
   camera: '카메라',
   library: '갤러리',
 };
+
+const uploadPhaseLabels: Record<UploadProgressPhase, string> = {
+  idle: '대기',
+  prepareUpload: '이미지 준비',
+  uploadMedia: 'Storage 이미지 업로드',
+  'saveCertification/shareTargets': '인증/공유 대상 저장',
+};
+
+function formatUploadPhaseLabel(phase: UploadProgressPhase | null) {
+  return phase ? uploadPhaseLabels[phase] : null;
+}
 
 export default function CameraScreen() {
   const colors = useAppColors();
@@ -41,8 +52,12 @@ export default function CameraScreen() {
     permissions,
     uploadJob,
     availableTags,
+    tagDirectoryStatus,
+    tagDirectoryError,
     lastCompletedUpload,
     simulateFailureOnce,
+    reloadCaptureTags,
+    createPersonalTag,
     openSourceSelector,
     requestAssetFromSource,
     setCaption,
@@ -57,12 +72,15 @@ export default function CameraScreen() {
     setSimulateFailureOnce,
   } = useCaptureSession();
 
+  const [newPersonalTagLabel, setNewPersonalTagLabel] = useState('');
+  const [isCreatingPersonalTag, setCreatingPersonalTag] = useState(false);
+
   const isBusyPreparing = stage === 'permissionCheck' || stage === 'captureOrPick';
   const isUploading = uploadJob.status === 'running';
   const canSubmit =
     Boolean(draft.asset) &&
     draft.selectedTagIds.length > 0 &&
-    draft.resolvedTargets.length > 0 &&
+    tagDirectoryStatus === 'ready' &&
     !isUploading;
   const deniedPermissions = (Object.values(permissions) ?? []).filter((permission) => !permission?.granted);
   const isShareRoute = pathname === '/capture/share';
@@ -74,11 +92,17 @@ export default function CameraScreen() {
   }, [isFocused, openSourceSelector, stage]);
 
   useEffect(() => {
+    if (isFocused) {
+      void reloadCaptureTags();
+    }
+  }, [isFocused, reloadCaptureTags]);
+
+  useEffect(() => {
     if (!isFocused || stage !== 'cancelled') {
       return;
     }
 
-    router.replace('/(tabs)/index');
+    router.replace('/');
     discardDraft('idle');
   }, [discardDraft, isFocused, stage]);
 
@@ -88,7 +112,7 @@ export default function CameraScreen() {
     }
 
     const timer = setTimeout(() => {
-      router.replace('/(tabs)/index');
+      router.replace('/');
       discardDraft('idle');
     }, 1400);
 
@@ -133,7 +157,7 @@ export default function CameraScreen() {
 
       if (stage === 'success') {
         discardDraft('idle');
-        router.replace('/(tabs)/index');
+        router.replace('/');
         return true;
       }
 
@@ -172,6 +196,28 @@ export default function CameraScreen() {
     void submitDraft();
   }
 
+  async function handleCreatePersonalTag() {
+    const label = newPersonalTagLabel.trim();
+
+    if (!label || isCreatingPersonalTag || isUploading) {
+      return;
+    }
+
+    setCreatingPersonalTag(true);
+
+    try {
+      await createPersonalTag(label);
+      setNewPersonalTagLabel('');
+    } catch (error) {
+      Alert.alert(
+        '태그 생성 실패',
+        error instanceof Error ? error.message : '개인 태그를 만들지 못했습니다.',
+      );
+    } finally {
+      setCreatingPersonalTag(false);
+    }
+  }
+
   function handleResumeEditing() {
     clearLastError();
     goToCompose();
@@ -197,7 +243,7 @@ export default function CameraScreen() {
 
     if (stage === 'success') {
       discardDraft('idle');
-      router.replace('/(tabs)/index');
+      router.replace('/');
       return;
     }
 
@@ -215,8 +261,12 @@ export default function CameraScreen() {
   function handleReturnToPreview() {
     goToPreview();
 
-    if (isShareRoute && navigation.canGoBack()) {
-      router.back();
+    if (isShareRoute) {
+      if (navigation.canGoBack()) {
+        router.back();
+      } else {
+        router.replace('/capture');
+      }
     }
   }
 
@@ -275,9 +325,9 @@ export default function CameraScreen() {
               borderColor: colors.border,
             },
           ]}>
-          <Text style={[styles.cardTitle, { color: colors.text }]}>사진을 어떻게 가져올까요?</Text>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>오늘 인증 사진을 골라주세요</Text>
           <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-            Android 실기기 기준으로 권한은 버튼을 누른 직후에만 요청합니다.
+            바로 촬영하거나 갤러리에서 이미 찍어둔 사진을 가져올 수 있어요.
           </Text>
           <View style={styles.actionColumn}>
             <AppButton
@@ -333,9 +383,9 @@ export default function CameraScreen() {
               borderColor: colors.border,
             },
           ]}>
-          <Text style={[styles.cardTitle, { color: colors.text }]}>미리보기</Text>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>사진 확인</Text>
           <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-            편집 없이 사진만 확인하고 다음 단계로 넘어갑니다.
+            인증에 사용할 사진이 맞는지 한 번만 확인해 주세요.
           </Text>
           <Image source={{ uri: draft.asset.uri }} style={styles.previewImage} />
           <View style={styles.metaGrid}>
@@ -368,6 +418,10 @@ export default function CameraScreen() {
   }
 
   function renderResolvedTargets() {
+    const selectedPersonalTagCount = availableTags.filter(
+      (tag) => tag.kind === 'personal' && draft.selectedTagIds.includes(tag.id),
+    ).length;
+
     return (
       <View
         style={[
@@ -377,19 +431,21 @@ export default function CameraScreen() {
             borderColor: colors.border,
           },
         ]}>
-        <Text style={[styles.cardTitle, { color: colors.text }]}>공유 대상 요약</Text>
-        <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-          선택한 그룹 태그 라벨을 기준으로 매칭된 그룹만 묶어서 보여줍니다.
+          <Text style={[styles.cardTitle, { color: colors.text }]}>공유될 곳</Text>
+          <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
+          선택한 태그와 연결된 그룹만 모아서 보여줍니다.
         </Text>
         {draft.resolvedTargets.length === 0 ? (
           <Text style={[styles.emptyStateText, { color: colors.textMuted }]}>
-            태그를 선택하면 공유될 그룹이 여기에 나타납니다.
+            {selectedPersonalTagCount > 0
+              ? '선택한 개인 태그는 개인공간에 저장됩니다. 그룹 공유는 연결된 그룹 태그를 선택하면 추가됩니다.'
+              : '태그를 선택하면 공유될 그룹이 여기에 나타납니다.'}
           </Text>
         ) : (
           <View style={styles.targetList}>
-            {draft.resolvedTargets.map((target) => (
+            {draft.resolvedTargets.map((target, targetIndex) => (
               <View
-                key={target.groupId}
+                key={`${target.groupId}-${target.matchedGroupTagIds.join('-')}-${targetIndex}`}
                 style={[
                   styles.targetCard,
                   {
@@ -440,9 +496,9 @@ export default function CameraScreen() {
               borderColor: colors.border,
             },
           ]}>
-          <Text style={[styles.cardTitle, { color: colors.text }]}>공유 준비</Text>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>한 줄 남기기</Text>
           <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-            문구는 인증 본문이고, 이미지 위 코멘트는 업로드 후 그룹 상세에서 남깁니다.
+            오늘의 인증에 붙일 짧은 문구를 남겨보세요.
           </Text>
           <Image source={{ uri: draft.asset.uri }} style={styles.composeImage} />
           <TextInput
@@ -490,9 +546,35 @@ export default function CameraScreen() {
           ]}>
           <Text style={[styles.cardTitle, { color: colors.text }]}>태그 선택</Text>
           <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-            그룹이 아니라 태그를 고릅니다. 각 태그는 연결 그룹 수를 함께 보여줍니다.
+            같은 태그를 쓰는 그룹과 개인공간에 함께 저장됩니다.
           </Text>
           <View style={styles.tagRow}>
+            {tagDirectoryStatus === 'loading' ? (
+              <View style={styles.busyRow}>
+                <ActivityIndicator color={colors.accent} />
+                <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
+                  내 그룹 태그를 불러오고 있습니다.
+                </Text>
+              </View>
+            ) : null}
+            {tagDirectoryStatus === 'ready' && availableTags.length === 0 ? (
+              <Text style={[styles.emptyStateText, { color: colors.textMuted }]}>
+                아직 선택할 태그가 없습니다. 아래에서 개인공간 태그를 바로 만들 수 있습니다.
+              </Text>
+            ) : null}
+            {tagDirectoryStatus === 'failure' ? (
+              <View style={styles.tagDirectoryError}>
+                <Text style={[styles.emptyStateText, { color: colors.textMuted }]} selectable>
+                  {tagDirectoryError ?? '태그 정보를 불러오지 못했습니다.'}
+                </Text>
+                <AppButton
+                  label="태그 다시 불러오기"
+                  onPress={() => void reloadCaptureTags()}
+                  variant="secondary"
+                  disabled={isUploading}
+                />
+              </View>
+            ) : null}
             {availableTags.map((tag) => {
               const selected = draft.selectedTagIds.includes(tag.id);
 
@@ -513,12 +595,50 @@ export default function CameraScreen() {
                     {tag.label}
                   </Text>
                   <Text style={[styles.tagMeta, { color: colors.textMuted }]}>
-                    {tag.connectedGroupCount}개 그룹
+                    {tag.kind === 'personal'
+                      ? '개인공간'
+                      : tag.personalTagId
+                        ? `${tag.connectedGroupCount}개 그룹 + 개인공간`
+                        : `${tag.connectedGroupCount}개 그룹`}
                   </Text>
                 </Pressable>
               );
             })}
           </View>
+          {tagDirectoryStatus === 'ready' ? (
+            <View style={styles.personalTagCreator}>
+              <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
+                원하는 태그가 없으면 개인공간 태그로 먼저 저장하세요.
+              </Text>
+              <View style={styles.personalTagInputRow}>
+                <TextInput
+                  value={newPersonalTagLabel}
+                  onChangeText={setNewPersonalTagLabel}
+                  editable={!isUploading && !isCreatingPersonalTag}
+                  placeholder="예: #운동"
+                  placeholderTextColor={colors.textMuted}
+                  style={[
+                    styles.personalTagInput,
+                    {
+                      backgroundColor: colors.background,
+                      borderColor: colors.border,
+                      color: colors.text,
+                    },
+                  ]}
+                  maxLength={24}
+                  onSubmitEditing={() => void handleCreatePersonalTag()}
+                />
+                <View style={styles.personalTagButton}>
+                  <AppButton
+                    label={isCreatingPersonalTag ? '추가 중...' : '개인 태그 추가'}
+                    onPress={() => void handleCreatePersonalTag()}
+                    variant="secondary"
+                    disabled={!newPersonalTagLabel.trim() || isUploading || isCreatingPersonalTag}
+                  />
+                </View>
+              </View>
+            </View>
+          ) : null}
           {draft.selectedTagIds.length === 0 ? (
             <Text style={[styles.emptyStateText, { color: colors.textMuted }]}>
               공유하려면 최소 1개 태그를 선택해야 합니다.
@@ -544,10 +664,34 @@ export default function CameraScreen() {
             <Text style={[styles.cardDescription, { color: colors.textMuted }]} selectable>
               {draft.lastError}
             </Text>
-            {uploadJob.errorCode ? (
-              <Text style={[styles.metaLabel, { color: colors.textMuted }]}>
-                오류 코드: {uploadJob.errorCode}
-              </Text>
+            {uploadJob.errorCode || uploadJob.errorPhase ? (
+              <View style={styles.errorMetaList}>
+                {uploadJob.errorPhase ? (
+                  <Text style={[styles.metaLabel, { color: colors.textMuted }]}>
+                    실패 단계: {formatUploadPhaseLabel(uploadJob.errorPhase)}
+                  </Text>
+                ) : null}
+                {uploadJob.errorCode ? (
+                  <Text style={[styles.metaLabel, { color: colors.textMuted }]}>
+                    오류 코드: {uploadJob.errorCode}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+            {uploadJob.errorDetails ? (
+              <View
+                style={[
+                  styles.errorLogBox,
+                  {
+                    backgroundColor: colors.background,
+                    borderColor: colors.border,
+                  },
+                ]}>
+                <Text style={[styles.errorLogTitle, { color: colors.text }]}>원본 오류 로그</Text>
+                <Text style={[styles.errorLogText, { color: colors.textMuted }]} selectable>
+                  {uploadJob.errorDetails}
+                </Text>
+              </View>
             ) : null}
           </View>
         ) : null}
@@ -637,7 +781,11 @@ export default function CameraScreen() {
           <Ionicons name="checkmark-circle-outline" size={20} color={colors.text} />
           <Text style={[styles.cardTitle, { color: colors.text }]}>
             {lastCompletedUpload
-              ? `${lastCompletedUpload.completedGroupCount}개 그룹에 공유 완료`
+              ? lastCompletedUpload.completedGroupCount > 0 && lastCompletedUpload.personalTagLabels.length > 0
+                ? `${lastCompletedUpload.completedGroupCount}개 그룹 + 개인공간 저장 완료`
+                : lastCompletedUpload.completedGroupCount > 0
+                  ? `${lastCompletedUpload.completedGroupCount}개 그룹에 공유 완료`
+                  : '개인공간 저장 완료'
               : '공유가 완료되었습니다'}
           </Text>
         </View>
@@ -662,6 +810,18 @@ export default function CameraScreen() {
               </View>
             </View>
             <View style={styles.tagRow}>
+              {lastCompletedUpload.personalTagLabels.map((tagLabel) => (
+                <View
+                  key={`personal-tag-${tagLabel}`}
+                  style={[
+                    styles.selectedTagBadge,
+                    {
+                      backgroundColor: colors.successSoft,
+                    },
+                  ]}>
+                  <Text style={[styles.selectedTagText, { color: colors.text }]}>{tagLabel}</Text>
+                </View>
+              ))}
               {lastCompletedUpload.groupTagLabels.map((tagLabel) => (
                 <View
                   key={`group-tag-${tagLabel}`}
@@ -676,9 +836,9 @@ export default function CameraScreen() {
               ))}
             </View>
             <View style={styles.tagRow}>
-              {lastCompletedUpload.targets.map((target) => (
+              {lastCompletedUpload.targets.map((target, targetIndex) => (
                 <View
-                  key={target.groupId}
+                  key={`${target.groupId}-${target.matchedGroupTagIds.join('-')}-${targetIndex}`}
                   style={[
                     styles.selectedTagBadge,
                     {
@@ -699,21 +859,21 @@ export default function CameraScreen() {
   function renderStagePill() {
     const label =
       stage === 'sourceSelect'
-        ? 'sourceSelect'
+        ? '사진 선택'
         : stage === 'permissionCheck'
-          ? 'permissionCheck'
+          ? '권한 확인'
           : stage === 'captureOrPick'
-            ? 'captureOrPick'
+            ? '사진 불러오기'
             : stage === 'preview'
-              ? 'preview'
+              ? '사진 확인'
               : stage === 'compose'
-                ? 'compose'
+                ? '공유 준비'
                 : stage === 'prepareUpload'
-                  ? 'prepareUpload'
+                  ? '업로드 준비'
                   : stage === 'uploadMedia'
-                    ? 'uploadMedia'
+                    ? '사진 업로드'
                     : stage === 'saveCertification'
-                      ? 'saveCertification/shareTargets'
+                      ? '기록 저장'
                       : stage;
 
     return (
@@ -749,10 +909,10 @@ export default function CameraScreen() {
               borderColor: colors.border,
             },
           ]}>
-          <Text style={[styles.eyebrow, { color: colors.accent }]}>Capture Flow</Text>
-          <Text style={[styles.title, { color: colors.text }]}>카메라 / 인증 업로드</Text>
+          <Text style={[styles.eyebrow, { color: colors.accent }]}>Today proof</Text>
+          <Text style={[styles.title, { color: colors.text }]}>오늘 인증 올리기</Text>
           <Text style={[styles.heroDescription, { color: colors.textMuted }]}>
-            카메라 탭 진입부터 사진 확보, 태그 기반 다중 공유, 실패 복구까지를 한 세션 안에서 처리합니다.
+            사진 한 장과 태그만 고르면 그룹 인증과 개인 기록이 함께 정리됩니다.
           </Text>
           {renderStagePill()}
         </View>
@@ -780,36 +940,37 @@ const styles = StyleSheet.create({
   },
   container: {
     flexGrow: 1,
-    padding: 20,
     gap: 16,
-    paddingBottom: 40,
+    padding: 20,
+    paddingBottom: 44,
   },
   hero: {
-    borderRadius: 24,
+    borderRadius: 30,
     borderWidth: 1,
-    padding: 20,
     gap: 10,
+    padding: 20,
   },
   eyebrow: {
     fontSize: 12,
     fontWeight: '800',
-    letterSpacing: 0.8,
+    letterSpacing: 0,
     textTransform: 'uppercase',
   },
   title: {
-    fontSize: 30,
-    fontWeight: '800',
+    fontSize: 29,
+    fontWeight: '900',
+    lineHeight: 35,
   },
   heroDescription: {
     fontSize: 15,
     lineHeight: 22,
   },
   stagePill: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
     alignSelf: 'flex-start',
     borderRadius: 999,
+    flexDirection: 'row',
+    gap: 6,
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
@@ -818,14 +979,15 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   sectionCard: {
-    borderRadius: 24,
+    borderRadius: 26,
     borderWidth: 1,
-    padding: 18,
     gap: 12,
+    padding: 18,
   },
   cardTitle: {
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 19,
+    fontWeight: '800',
+    lineHeight: 24,
   },
   cardDescription: {
     fontSize: 14,
@@ -860,19 +1022,19 @@ const styles = StyleSheet.create({
   previewImage: {
     width: '100%',
     aspectRatio: 1,
-    borderRadius: 22,
+    borderRadius: 24,
     backgroundColor: '#D1D5DB',
   },
   composeImage: {
     width: '100%',
     aspectRatio: 0.95,
-    borderRadius: 22,
+    borderRadius: 24,
     backgroundColor: '#D1D5DB',
   },
   successImage: {
     width: '100%',
     aspectRatio: 1,
-    borderRadius: 20,
+    borderRadius: 24,
     backgroundColor: '#D1D5DB',
   },
   metaGrid: {
@@ -881,8 +1043,12 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   metaChip: {
+    backgroundColor: 'rgba(255, 255, 255, 0.5)',
+    borderRadius: 16,
     minWidth: 120,
     gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   metaLabel: {
     fontSize: 12,
@@ -916,8 +1082,32 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 10,
   },
-  tagChip: {
+  tagDirectoryError: {
+    gap: 10,
+    width: '100%',
+  },
+  personalTagCreator: {
+    gap: 10,
+  },
+  personalTagInputRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  personalTagInput: {
     borderRadius: 18,
+    borderWidth: 1,
+    flex: 1,
+    fontSize: 15,
+    minWidth: 150,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  personalTagButton: {
+    minWidth: 132,
+  },
+  tagChip: {
+    borderRadius: 20,
     borderWidth: 1,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -934,6 +1124,24 @@ const styles = StyleSheet.create({
   emptyStateText: {
     fontSize: 14,
     lineHeight: 20,
+  },
+  errorMetaList: {
+    gap: 4,
+  },
+  errorLogBox: {
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 12,
+    gap: 8,
+  },
+  errorLogTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  errorLogText: {
+    fontFamily: 'monospace',
+    fontSize: 12,
+    lineHeight: 17,
   },
   targetList: {
     gap: 10,

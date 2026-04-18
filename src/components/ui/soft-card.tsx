@@ -13,15 +13,15 @@ type SoftCardProps = PropsWithChildren<{
 
 const variantStyles: Record<SoftCardVariant, ViewStyle> = {
   'personal-space': {
-    backgroundColor: colors.surface.primary,
-    borderColor: colors.line.accent,
+    backgroundColor: colors.bg.warm,
+    borderColor: colors.line.warm,
   },
   'group-space': {
-    backgroundColor: colors.surface.secondary,
-    borderColor: colors.line.soft,
+    backgroundColor: colors.brand.primarySoft,
+    borderColor: colors.line.accent,
   },
   certification: {
-    backgroundColor: colors.brand.secondarySoft,
+    backgroundColor: colors.brand.mintSoft,
     borderColor: colors.line.soft,
   },
   empty: {

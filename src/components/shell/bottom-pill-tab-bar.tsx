@@ -113,9 +113,9 @@ const styles = StyleSheet.create({
   },
   inner: {
     alignItems: 'center',
-    backgroundColor: colors.surface.primary,
-    borderColor: colors.line.soft,
-    borderRadius: radius.pill,
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.warm,
+    borderRadius: 28,
     borderWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -136,7 +136,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
   },
   tabButtonActive: {
-    backgroundColor: colors.surface.tertiary,
+    backgroundColor: colors.brand.butterSoft,
   },
   tabLabel: {
     fontSize: typography.label.fontSize,
@@ -150,8 +150,10 @@ const styles = StyleSheet.create({
   },
   cameraButton: {
     alignItems: 'center',
-    backgroundColor: colors.brand.primary,
-    borderRadius: radius.pill,
+    backgroundColor: colors.surface.inverse,
+    borderColor: colors.brand.accent,
+    borderRadius: 24,
+    borderWidth: 2,
     gap: spacing.xxs,
     justifyContent: 'center',
     minHeight: 64,

@@ -5,6 +5,7 @@
 -- 0. 확장
 -- ============================================================
 create extension if not exists "uuid-ossp";
+create extension if not exists "pgcrypto";
 
 -- ============================================================
 -- PART A: 테이블 생성

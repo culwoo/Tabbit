@@ -5,6 +5,7 @@ import type { Session, User } from '@supabase/supabase-js';
 
 import { env } from '@/config/env';
 import { createSessionFromUrl, signInWithGoogle, signOutFromSupabase } from '@/features/auth/lib/supabase-auth';
+import { deactivateCurrentPushRegistration } from '@/features/notifications/lib/push-registration';
 import { supabase } from '@/lib/supabase/client';
 
 export type AppBootstrapState = 'checking' | 'signed-out' | 'signed-in';
@@ -43,12 +44,32 @@ export function AppSessionProvider({ children }: PropsWithChildren) {
 
     const client = supabase;
 
+    async function handleIncomingAuthUrl(url: string) {
+      try {
+        const nextSession = await createSessionFromUrl(url);
+
+        if (!isMounted || !nextSession) {
+          return;
+        }
+
+        setSession(nextSession);
+        setAuthError(null);
+        setBootstrapState('signed-in');
+      } catch (error) {
+        if (!isMounted) {
+          return;
+        }
+
+        setAuthError(normalizeAuthError(error));
+      }
+    }
+
     async function syncInitialSession() {
       try {
         const initialUrl = await Linking.getInitialURL();
 
         if (initialUrl) {
-          await createSessionFromUrl(initialUrl);
+          await handleIncomingAuthUrl(initialUrl);
         }
 
         const { data, error } = await client.auth.getSession();
@@ -86,13 +107,7 @@ export function AppSessionProvider({ children }: PropsWithChildren) {
     });
 
     const linkingSubscription = Linking.addEventListener('url', ({ url }) => {
-      void createSessionFromUrl(url).catch((error) => {
-        if (!isMounted) {
-          return;
-        }
-
-        setAuthError(normalizeAuthError(error));
-      });
+      void handleIncomingAuthUrl(url);
     });
 
     return () => {
@@ -126,6 +141,10 @@ export function AppSessionProvider({ children }: PropsWithChildren) {
     setAuthError(null);
 
     try {
+      await deactivateCurrentPushRegistration().catch((error) => {
+        console.warn('[AppSessionProvider] push token deactivation failed:', error);
+      });
+
       if (supabase) {
         await signOutFromSupabase();
       }

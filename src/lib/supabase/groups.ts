@@ -1,7 +1,20 @@
 import { requireSupabase } from './client';
-import type { GroupRow, GroupMemberRow, GroupTagRow } from './database-types';
+import type { GroupRow, GroupMemberRow, GroupTagRow, PersonalTagRow } from './database-types';
 
 const db = () => requireSupabase();
+
+function sanitizeTagBody(label: string) {
+  return label.trim().replace(/^#+/, '').replace(/\s+/g, ' ');
+}
+
+function normalizeTagLabelInput(label: string) {
+  return sanitizeTagBody(label).toLocaleLowerCase('ko-KR');
+}
+
+function formatStoredTagLabel(label: string) {
+  const body = sanitizeTagBody(label);
+  return body ? `#${body}` : '#';
+}
 
 // ── 그룹 목록 (내가 속한) ──
 
@@ -11,6 +24,7 @@ export async function fetchMyGroups() {
     .select(`
       group_id,
       role,
+      joined_at,
       groups:group_id (
         id, name, description, member_limit, threshold_rule,
         invite_code, created_by, created_at
@@ -20,10 +34,27 @@ export async function fetchMyGroups() {
 
   if (error) throw error;
 
-  return (data ?? []).map((row) => ({
-    ...(row.groups as unknown as GroupRow),
-    myRole: row.role as GroupMemberRow['role'],
-  }));
+  const groupsById = new Map<string, GroupRow & { myRole: GroupMemberRow['role'] }>();
+
+  for (const row of data ?? []) {
+    const group = row.groups as unknown as GroupRow | null;
+
+    if (!group) {
+      continue;
+    }
+
+    const existing = groupsById.get(group.id);
+    const role = row.role as GroupMemberRow['role'];
+
+    if (!existing || role === 'owner') {
+      groupsById.set(group.id, {
+        ...group,
+        myRole: role,
+      });
+    }
+  }
+
+  return [...groupsById.values()];
 }
 
 // ── 그룹 상세 ──
@@ -46,7 +77,7 @@ export async function fetchGroupMembers(groupId: string) {
     .from('group_members')
     .select(`
       id, group_id, user_id, role, status, joined_at,
-      users:user_id ( id, display_name, avatar_url )
+      users:user_id ( id, display_name, handle, avatar_url )
     `)
     .eq('group_id', groupId)
     .eq('status', 'active')
@@ -67,6 +98,86 @@ export async function fetchGroupTags(groupId: string) {
 
   if (error) throw error;
   return (data ?? []) as GroupTagRow[];
+}
+
+// ── 개인 태그 목록 ──
+
+export async function fetchPersonalTags() {
+  const { data, error } = await db()
+    .from('personal_tags')
+    .select('*')
+    .order('created_at', { ascending: true });
+
+  if (error) throw error;
+  return (data ?? []) as PersonalTagRow[];
+}
+
+async function upsertPersonalTagsFromGroupTags(userId: string, tags: GroupTagRow[]) {
+  const uniqueTags = new Map<string, { label: string; normalized_label: string }>();
+
+  for (const tag of tags) {
+    const normalizedLabel = tag.normalized_label || normalizeTagLabelInput(tag.label);
+
+    if (!normalizedLabel || uniqueTags.has(normalizedLabel)) {
+      continue;
+    }
+
+    uniqueTags.set(normalizedLabel, {
+      label: formatStoredTagLabel(tag.label),
+      normalized_label: normalizedLabel,
+    });
+  }
+
+  const rows = [...uniqueTags.values()].map((tag) => ({
+    user_id: userId,
+    label: tag.label,
+    normalized_label: tag.normalized_label,
+  }));
+
+  if (rows.length === 0) {
+    return;
+  }
+
+  const { error } = await db()
+    .from('personal_tags')
+    .upsert(rows, {
+      onConflict: 'user_id,normalized_label',
+      ignoreDuplicates: true,
+    });
+
+  if (error) throw error;
+}
+
+export async function syncGroupTagsToPersonalTags(userId: string) {
+  const groups = await fetchMyGroups();
+  const nestedTags = await Promise.all(groups.map((group) => fetchGroupTags(group.id)));
+
+  await upsertPersonalTagsFromGroupTags(userId, nestedTags.flat());
+  return fetchPersonalTags();
+}
+
+// ── 활성 그룹 멤버 수 ──
+
+export async function fetchActiveGroupMemberCounts(groupIds: string[]) {
+  if (groupIds.length === 0) {
+    return new Map<string, number>();
+  }
+
+  const { data, error } = await db()
+    .from('group_members')
+    .select('group_id')
+    .in('group_id', groupIds)
+    .eq('status', 'active');
+
+  if (error) throw error;
+
+  const counts = new Map<string, number>();
+
+  for (const row of data ?? []) {
+    counts.set(row.group_id, (counts.get(row.group_id) ?? 0) + 1);
+  }
+
+  return counts;
 }
 
 // ── 그룹 생성 ──
@@ -151,19 +262,25 @@ export async function joinGroupByInviteCode(inviteCode: string, userId: string) 
       .insert({ group_id: group.id, user_id: userId, role: 'member' });
   }
 
+  await syncGroupTagsToPersonalTags(userId);
+
   return { groupId: group.id, groupName: group.name };
 }
 
 // ── 그룹 태그 추가 ──
 
-export async function addGroupTag(groupId: string, label: string) {
-  const normalizedLabel = label.replace(/^#+/, '').trim().toLowerCase().replace(/\s+/g, ' ');
+export async function addGroupTag(groupId: string, label: string, syncToPersonalUserId?: string) {
+  const normalizedLabel = normalizeTagLabelInput(label);
+
+  if (!normalizedLabel) {
+    throw new Error('태그 이름을 입력해주세요.');
+  }
 
   const { data, error } = await db()
     .from('group_tags')
     .insert({
       group_id: groupId,
-      label: label.startsWith('#') ? label : `#${label}`,
+      label: formatStoredTagLabel(label),
       normalized_label: normalizedLabel,
     })
     .select()
@@ -174,7 +291,69 @@ export async function addGroupTag(groupId: string, label: string) {
     throw error;
   }
 
-  return data as GroupTagRow;
+  const groupTag = data as GroupTagRow;
+
+  if (syncToPersonalUserId) {
+    await addPersonalTag(syncToPersonalUserId, groupTag.label);
+  }
+
+  return groupTag;
+}
+
+// ── 그룹 태그 삭제 ──
+
+export async function deleteGroupTag(groupId: string, groupTagId: string) {
+  const { error } = await db()
+    .from('group_tags')
+    .delete()
+    .eq('group_id', groupId)
+    .eq('id', groupTagId);
+
+  if (error) {
+    if (/foreign key|violates/i.test(error.message)) {
+      throw new Error('이미 인증이나 스토리 기록에 사용된 태그는 삭제할 수 없습니다.');
+    }
+
+    throw error;
+  }
+}
+
+// ── 개인 태그 추가 ──
+
+export async function addPersonalTag(userId: string, label: string) {
+  const normalizedLabel = normalizeTagLabelInput(label);
+
+  if (!normalizedLabel) {
+    throw new Error('태그 이름을 입력해주세요.');
+  }
+
+  const { data, error } = await db()
+    .from('personal_tags')
+    .insert({
+      user_id: userId,
+      label: formatStoredTagLabel(label),
+      normalized_label: normalizedLabel,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    if (error.code === '23505') {
+      const { data: existing, error: existingError } = await db()
+        .from('personal_tags')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('normalized_label', normalizedLabel)
+        .single();
+
+      if (existingError) throw existingError;
+      return existing as PersonalTagRow;
+    }
+
+    throw error;
+  }
+
+  return data as PersonalTagRow;
 }
 
 // ── 그룹 탈퇴 ──

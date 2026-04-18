@@ -1,15 +1,11 @@
 import * as QueryParams from 'expo-auth-session/build/QueryParams';
-import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 
 import { requireSupabase } from '@/lib/supabase/client';
 
 WebBrowser.maybeCompleteAuthSession();
 
-export const supabaseRedirectUrl = makeRedirectUri({
-  path: 'sign-in',
-  scheme: 'tabbit',
-});
+export const supabaseRedirectUrl = 'tabbit://sign-in';
 
 export async function createSessionFromUrl(url: string) {
   const supabase = requireSupabase();
@@ -21,6 +17,17 @@ export async function createSessionFromUrl(url: string) {
 
   const accessToken = typeof params.access_token === 'string' ? params.access_token : null;
   const refreshToken = typeof params.refresh_token === 'string' ? params.refresh_token : null;
+  const authorizationCode = typeof params.code === 'string' ? params.code : null;
+
+  if (authorizationCode) {
+    const { data, error } = await supabase.auth.exchangeCodeForSession(authorizationCode);
+
+    if (error) {
+      throw error;
+    }
+
+    return data.session;
+  }
 
   if (!accessToken || !refreshToken) {
     return null;

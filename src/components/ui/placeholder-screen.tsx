@@ -1,4 +1,6 @@
 import { PropsWithChildren } from 'react';
+import type { ComponentProps } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { HeaderAction } from '@/components/shell/app-header';
@@ -20,11 +22,13 @@ type PlaceholderScreenProps = PropsWithChildren<{
   description: string;
   primaryAction?: {
     label: string;
+    icon?: ComponentProps<typeof Ionicons>['name'];
     onPress: () => void;
     disabled?: boolean;
   };
   secondaryAction?: {
     label: string;
+    icon?: ComponentProps<typeof Ionicons>['name'];
     onPress: () => void;
     disabled?: boolean;
   };
@@ -66,6 +70,7 @@ export function PlaceholderScreen({
                 <View style={styles.actionItem}>
                   <AppButton
                     disabled={primaryAction.disabled}
+                    icon={primaryAction.icon}
                     label={primaryAction.label}
                     onPress={primaryAction.onPress}
                   />
@@ -75,6 +80,7 @@ export function PlaceholderScreen({
                 <View style={styles.actionItem}>
                   <AppButton
                     disabled={secondaryAction.disabled}
+                    icon={secondaryAction.icon}
                     label={secondaryAction.label}
                     onPress={secondaryAction.onPress}
                     variant="secondary"
@@ -101,6 +107,8 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   hero: {
+    backgroundColor: colors.bg.warm,
+    borderColor: colors.line.warm,
     gap: spacing.sm,
   },
   eyebrow: {

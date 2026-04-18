@@ -7,9 +7,14 @@ export {
   fetchGroup,
   fetchGroupMembers,
   fetchGroupTags,
+  fetchPersonalTags,
+  syncGroupTagsToPersonalTags,
+  fetchActiveGroupMemberCounts,
   createGroup,
   joinGroupByInviteCode,
   addGroupTag,
+  deleteGroupTag,
+  addPersonalTag,
   leaveGroup,
 } from './groups';
 
@@ -17,6 +22,8 @@ export {
   uploadCertification,
   fetchCertificationsByGroupTag,
   fetchMyCertifications,
+  fetchMyPersonalCertificationRecords,
+  type PersonalCertificationRecord,
   deleteCertification,
   fetchShareTargets,
 } from './certifications';
@@ -36,5 +43,12 @@ export {
   fetchGroupThresholdStates,
   fetchStoryCard,
   fetchGroupStoryCards,
+  saveStoryCardSnapshot,
   subscribeToThresholdChanges,
 } from './thresholds';
+
+export {
+  registerPushToken,
+  disablePushToken,
+  type PushTokenPlatform,
+} from './push-tokens';

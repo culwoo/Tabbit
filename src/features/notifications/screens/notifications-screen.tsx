@@ -119,7 +119,7 @@ export default function NotificationsScreen() {
     if (navigation.canGoBack()) {
       router.back();
     } else {
-      router.replace('/(tabs)/index');
+      router.replace('/');
     }
   }
 
@@ -176,9 +176,9 @@ export default function NotificationsScreen() {
       ) : notifications.length === 0 ? (
         <View style={styles.emptyBox}>
           <Ionicons color={colors.text.tertiary} name="notifications-off-outline" size={48} />
-          <Text style={styles.emptyTitle}>알림이 없어요</Text>
+          <Text style={styles.emptyTitle}>조용한 하루예요</Text>
           <Text style={styles.emptyDesc}>
-            그룹에 참여하면 인증, 채팅, 스토리 알림이{'\n'}여기에 나타나요
+            인증, 채팅, 스토리 언락 소식이 생기면 여기에 모입니다.
           </Text>
         </View>
       ) : (
@@ -235,21 +235,30 @@ const styles = StyleSheet.create({
 
   // 리스트
   list: {
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xxxl,
-    paddingTop: spacing.xs,
+    paddingTop: spacing.sm,
   },
   notifRow: {
     alignItems: 'flex-start',
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.soft,
+    borderRadius: radius.card,
+    borderWidth: 1,
     flexDirection: 'row',
     gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
   },
   notifRowUnread: {
-    backgroundColor: colors.brand.primarySoft,
+    backgroundColor: colors.brand.butterSoft,
+    borderColor: colors.line.warm,
   },
   iconCircle: {
     alignItems: 'center',
+    borderColor: colors.line.soft,
+    borderWidth: 1,
     borderRadius: radius.pill,
     height: 36,
     justifyContent: 'center',

@@ -62,9 +62,14 @@ export function AppHeader({ variant, title, rightActions, onBack }: AppHeaderPro
     return (
       <View style={[styles.container, { paddingTop: topPadding }]}>
         <View style={styles.homeRow}>
-          <View>
-            <Text style={styles.logo}>Tabbit</Text>
-            <Text style={styles.logoCaption}>today, together, softly</Text>
+          <View style={styles.brandRow}>
+            <View style={styles.brandMark}>
+              <Text style={styles.brandMarkText}>T</Text>
+            </View>
+            <View>
+              <Text style={styles.logo}>Tabbit</Text>
+              <Text style={styles.logoCaption}>오늘도 같이 쌓기</Text>
+            </View>
           </View>
           <HeaderActions actions={rightActions} />
         </View>
@@ -140,7 +145,7 @@ const styles = StyleSheet.create({
   },
   iconButton: {
     alignItems: 'center',
-    backgroundColor: colors.surface.primary,
+    backgroundColor: colors.surface.raised,
     borderColor: colors.line.soft,
     borderRadius: radius.pill,
     borderWidth: 1,
@@ -148,6 +153,28 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 40,
     ...shadow.card,
+  },
+  brandRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  brandMark: {
+    alignItems: 'center',
+    backgroundColor: colors.surface.inverse,
+    borderColor: colors.brand.accent,
+    borderRadius: 14,
+    borderWidth: 2,
+    height: 38,
+    justifyContent: 'center',
+    transform: [{ rotate: '-4deg' }],
+    width: 38,
+  },
+  brandMarkText: {
+    color: colors.text.inverse,
+    fontSize: 18,
+    fontWeight: '900',
+    lineHeight: 22,
   },
   actionsRow: {
     flexDirection: 'row',
@@ -160,7 +187,7 @@ const styles = StyleSheet.create({
     color: colors.text.primary,
     fontSize: 28,
     fontWeight: typography.title.fontWeight,
-    letterSpacing: -0.6,
+    letterSpacing: 0,
     lineHeight: 32,
   },
   logoCaption: {

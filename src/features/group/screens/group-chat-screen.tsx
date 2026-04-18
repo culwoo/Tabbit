@@ -109,7 +109,7 @@ export default function GroupChatScreen() {
     if (navigation.canGoBack()) {
       router.back();
     } else {
-      router.replace('/(tabs)/index');
+      router.replace('/');
     }
   }
 
@@ -153,8 +153,8 @@ export default function GroupChatScreen() {
         ) : messages.length === 0 ? (
           <View style={styles.emptyBox}>
             <Ionicons color={colors.text.tertiary} name="chatbubbles-outline" size={48} />
-            <Text style={styles.emptyTitle}>아직 대화가 없어요</Text>
-            <Text style={styles.emptyDesc}>첫 메시지를 보내볼까요?</Text>
+            <Text style={styles.emptyTitle}>아직 남긴 말이 없어요</Text>
+            <Text style={styles.emptyDesc}>오늘 인증을 기다리는 친구들에게 짧게 말을 걸어보세요.</Text>
           </View>
         ) : (
           <FlatList
@@ -174,7 +174,7 @@ export default function GroupChatScreen() {
             maxLength={500}
             multiline
             onChangeText={setInputText}
-            placeholder="메시지를 입력하세요"
+            placeholder="짧은 응원을 남겨보세요"
             placeholderTextColor={colors.text.tertiary}
             style={styles.textInput}
             value={inputText}
@@ -255,14 +255,16 @@ const styles = StyleSheet.create({
   },
   avatar: {
     alignItems: 'center',
-    backgroundColor: colors.brand.primarySoft,
+    backgroundColor: colors.brand.butterSoft,
+    borderColor: colors.line.warm,
+    borderWidth: 1,
     borderRadius: 16,
     height: 32,
     justifyContent: 'center',
     width: 32,
   },
   avatarText: {
-    color: colors.brand.primary,
+    color: colors.text.primary,
     fontSize: 13,
     fontWeight: '700',
   },
@@ -282,11 +284,15 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   bubbleOther: {
-    backgroundColor: colors.surface.primary,
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.soft,
+    borderWidth: 1,
     borderBottomLeftRadius: 4,
   },
   bubbleMine: {
-    backgroundColor: colors.brand.primary,
+    backgroundColor: colors.surface.inverse,
+    borderColor: colors.brand.accent,
+    borderWidth: 1,
     borderBottomRightRadius: 4,
   },
   bubbleText: {
@@ -311,8 +317,8 @@ const styles = StyleSheet.create({
   // 입력 바
   inputBar: {
     alignItems: 'flex-end',
-    backgroundColor: colors.surface.primary,
-    borderTopColor: colors.line.soft,
+    backgroundColor: colors.bg.warm,
+    borderTopColor: colors.line.warm,
     borderTopWidth: 1,
     flexDirection: 'row',
     gap: spacing.xs,
@@ -321,7 +327,9 @@ const styles = StyleSheet.create({
     paddingTop: spacing.xs,
   },
   textInput: {
-    backgroundColor: colors.surface.tertiary,
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.warm,
+    borderWidth: 1,
     borderRadius: radius.input,
     color: colors.text.primary,
     flex: 1,

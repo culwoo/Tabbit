@@ -1,12 +1,14 @@
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, useNavigation } from 'expo-router';
 
+import { AppHeader } from '@/components/shell/app-header';
 import { AppButton } from '@/components/ui/app-button';
 import { SoftCard } from '@/components/ui/soft-card';
 import { colors, radius, spacing, typography } from '@/constants/tokens';
 import { formatLifeDayLabel, formatTimestampLabel } from '@/lib/life-day';
-import { selectDateDetail, useStoryShareStore } from '@/store/story-share-store';
+import { resolveLifestyleDate } from '@/lib/domain';
+import { useDateDetail } from '../hooks/use-date-detail';
 
 function buildGroupRoute(groupId: string, tagId: string, lifeDay: string, shareMode?: boolean) {
   const query = new URLSearchParams({
@@ -21,59 +23,103 @@ function buildGroupRoute(groupId: string, tagId: string, lifeDay: string, shareM
   return `/groups/${groupId}?${query.toString()}`;
 }
 
+function renderThresholdLabel(status: string) {
+  if (status === 'provisional_unlocked' || status === 'finalized') {
+    return '언락됨';
+  }
+
+  if (status === 'expired') {
+    return '마감됨';
+  }
+
+  return '미언락';
+}
+
 export default function DateDetailScreen() {
+  const navigation = useNavigation();
   const { date } = useLocalSearchParams<{ date: string }>();
-  const selectedDate = Array.isArray(date) ? date[0] : date ?? '2026-04-15';
-  const store = useStoryShareStore();
-  const detail = selectDateDetail(store, selectedDate);
+  const selectedDate = Array.isArray(date) ? date[0] : date ?? resolveLifestyleDate(new Date());
+
+  const { errorMessage, loading, groupEntries, personalRecords, refresh } = useDateDetail(selectedDate);
+
+  function handleBack() {
+    if (navigation.canGoBack()) {
+      router.back();
+      return;
+    }
+
+    router.replace('/');
+  }
+
+  if (loading) {
+    return (
+      <View style={styles.screen}>
+        <AppHeader onBack={handleBack} title="날짜 상세" variant="detail" />
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={colors.brand.primary} />
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.screen}>
+      <AppHeader onBack={handleBack} title="날짜 상세" variant="detail" />
       <ScrollView
         contentContainerStyle={styles.container}
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}>
         <SoftCard style={styles.heroCard} variant="empty">
-          <Text style={styles.heroEyebrow}>Date detail</Text>
+          <Text style={styles.heroEyebrow}>Daily keepsake</Text>
           <Text style={styles.heroTitle}>{formatLifeDayLabel(selectedDate)}</Text>
           <Text style={styles.heroDescription}>
-            그룹 언락 기록과 저장된 스냅샷, 개인 회고를 한 화면에서 분리해 보여줍니다.
+            이날의 그룹 스토리와 개인공간 기록을 한 번에 다시 봅니다.
           </Text>
           <View style={styles.heroMetrics}>
             <View style={styles.metricBox}>
               <Text style={styles.metricLabel}>그룹 기록</Text>
-              <Text style={styles.metricValue}>{detail.groupEntries.length}</Text>
+              <Text style={styles.metricValue}>{groupEntries.length}</Text>
             </View>
             <View style={styles.metricBox}>
               <Text style={styles.metricLabel}>개인 기록</Text>
-              <Text style={styles.metricValue}>{detail.personalRecords.length}</Text>
+              <Text style={styles.metricValue}>{personalRecords.length}</Text>
             </View>
           </View>
         </SoftCard>
 
+        {errorMessage ? (
+          <SoftCard style={styles.sectionCard} variant="empty">
+            <Text selectable style={styles.emptyCopy}>{errorMessage}</Text>
+            <AppButton label="다시 불러오기" onPress={() => void refresh()} variant="secondary" />
+          </SoftCard>
+        ) : null}
+
         <SoftCard style={styles.sectionCard} variant="group-space">
-          <Text style={styles.sectionTitle}>그룹 언락 / 공유 기록</Text>
-          {detail.groupEntries.length === 0 ? (
+          <Text style={styles.sectionTitle}>그룹 스토리 기록</Text>
+          {groupEntries.length === 0 ? (
             <Text style={styles.emptyCopy}>이 날짜에 저장된 그룹 인증 기록이 아직 없습니다.</Text>
           ) : (
             <View style={styles.groupEntryList}>
-              {detail.groupEntries.map((entry) => (
-                <View key={`${entry.groupId}:${entry.tagId}:${entry.lifeDay}`} style={styles.groupEntryCard}>
+              {groupEntries.map((entry, entryIndex) => {
+                const hasSavedSnapshot = Boolean(entry.snapshot?.last_snapshot_exported_at);
+
+                return (
+                <View key={`${entry.groupId}:${entry.tagId}:${entry.lifeDay}:${entryIndex}`} style={styles.groupEntryCard}>
                   <View style={styles.groupEntryHeader}>
                     <View style={styles.groupEntryCopy}>
                       <Text style={styles.groupEntryTitle}>
-                        {entry.groupEmoji} {entry.groupName} {entry.tagLabel}
+                        {entry.groupName} {entry.tagLabel}
                       </Text>
                       <Text style={styles.groupEntryMeta}>
-                        {entry.shareProgressLabel} · {entry.thresholdState.status === 'locked' ? '미언락' : '언락됨'}
+                        {entry.shareProgressLabel} · {renderThresholdLabel(entry.thresholdState.status)}
                       </Text>
                     </View>
                     <View
                       style={[
                         styles.badge,
-                        entry.snapshot ? styles.badgeSaved : styles.badgeUnlocked,
+                        hasSavedSnapshot ? styles.badgeSaved : styles.badgeUnlocked,
                       ]}>
-                      <Text style={styles.badgeText}>{entry.snapshot ? 'snapshot 저장됨' : '언락됨'}</Text>
+                      <Text style={styles.badgeText}>{hasSavedSnapshot ? '스토리 저장됨' : renderThresholdLabel(entry.thresholdState.status)}</Text>
                     </View>
                   </View>
 
@@ -81,11 +127,11 @@ export default function DateDetailScreen() {
 
                   <View style={styles.timelineRow}>
                     <Text style={styles.timelineText}>
-                      언락 시점 {formatTimestampLabel(entry.thresholdState.unlockedAt)}
+                      언락 시점 {formatTimestampLabel('unlocked_at' in entry.thresholdState ? entry.thresholdState.unlocked_at ?? '' : '')}
                     </Text>
-                    {entry.snapshot ? (
+                    {hasSavedSnapshot ? (
                       <Text style={styles.timelineText}>
-                        저장 시점 {formatTimestampLabel(entry.snapshot.exportedAt)}
+                        저장 시점 {formatTimestampLabel(entry.snapshot?.last_snapshot_exported_at ?? '')}
                       </Text>
                     ) : null}
                   </View>
@@ -109,21 +155,28 @@ export default function DateDetailScreen() {
                     </View>
                   </View>
                 </View>
-              ))}
+                );
+              })}
             </View>
           )}
         </SoftCard>
 
         <SoftCard style={styles.sectionCard} variant="personal-space">
-          <Text style={styles.sectionTitle}>개인공간 기록</Text>
-          {detail.personalRecords.length === 0 ? (
+          <Text style={styles.sectionTitle}>나만의 기록</Text>
+          {personalRecords.length === 0 ? (
             <Text style={styles.emptyCopy}>이 날짜에는 개인 회고가 없습니다.</Text>
           ) : (
             <View style={styles.personalList}>
-              {detail.personalRecords.map((record) => (
-                <View key={record.id} style={[styles.personalCard, { backgroundColor: record.accentColor }]}>
-                  <Text style={styles.personalTitle}>{record.title}</Text>
-                  <Text style={styles.personalSummary}>{record.summary}</Text>
+              {personalRecords.map((record, recordIndex) => (
+                <View key={`${record.id}:${recordIndex}`} style={styles.personalCard}>
+                  {record.imageUrl ? (
+                    <Image source={{ uri: record.imageUrl }} style={styles.personalImage} />
+                  ) : null}
+                  <View style={styles.personalCopy}>
+                    <Text style={styles.personalTitle}>{record.title}</Text>
+                    <Text style={styles.personalSummary}>{record.summary}</Text>
+                    <Text style={styles.personalMeta}>{formatTimestampLabel(record.uploadedAt)}</Text>
+                  </View>
                 </View>
               ))}
             </View>
@@ -139,19 +192,25 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg.canvas,
   },
+  center: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+  },
   container: {
     gap: spacing.md,
     padding: spacing.lg,
     paddingBottom: spacing.xxl,
   },
   heroCard: {
+    backgroundColor: colors.bg.warm,
+    borderColor: colors.line.warm,
     gap: spacing.sm,
   },
   heroEyebrow: {
-    color: colors.brand.primary,
+    color: colors.brand.accent,
     fontSize: 12,
     fontWeight: typography.eyebrow.fontWeight,
-    letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
   heroTitle: {
@@ -170,8 +229,10 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   metricBox: {
-    backgroundColor: colors.surface.secondary,
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.warm,
     borderRadius: radius.input,
+    borderWidth: 1,
     flex: 1,
     gap: spacing.xxs,
     padding: spacing.md,
@@ -204,7 +265,9 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   groupEntryCard: {
-    backgroundColor: colors.surface.primary,
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.soft,
+    borderWidth: 1,
     borderRadius: radius.card - 8,
     gap: spacing.sm,
     padding: spacing.md,
@@ -272,9 +335,24 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   personalCard: {
+    alignItems: 'center',
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.warm,
+    borderWidth: 1,
     borderRadius: radius.card - 8,
+    flexDirection: 'row',
     gap: spacing.xs,
     padding: spacing.md,
+  },
+  personalImage: {
+    backgroundColor: colors.surface.secondary,
+    borderRadius: radius.input,
+    height: 64,
+    width: 64,
+  },
+  personalCopy: {
+    flex: 1,
+    gap: spacing.xxs,
   },
   personalTitle: {
     color: colors.text.primary,
@@ -286,5 +364,10 @@ const styles = StyleSheet.create({
     color: colors.text.secondary,
     fontSize: typography.label.fontSize,
     lineHeight: 20,
+  },
+  personalMeta: {
+    color: colors.text.tertiary,
+    fontSize: 12,
+    lineHeight: 16,
   },
 });

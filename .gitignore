@@ -35,6 +35,13 @@ yarn-error.*
 .env.local
 .env*.local
 
+# local service config
+google-services.json
+android/app/google-services.json
+
+# Supabase local state
+supabase/.temp/
+
 # typescript
 *.tsbuildinfo
 
@@ -46,6 +53,9 @@ android/app/.cxx/
 android/app/build/
 android/build/
 android/local.properties
+
+# crash/replay logs
+*.log
 
 # Worktrees
 .worktrees/

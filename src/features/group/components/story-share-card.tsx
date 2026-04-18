@@ -1,18 +1,19 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { ImageBackground, StyleSheet, Text, View } from 'react-native';
 
 import { colors, radius, spacing, typography } from '@/constants/tokens';
 import { formatLifeDayLabel, formatTimestampLabel } from '@/lib/life-day';
 
-import type { GroupMemberShareCard, GroupReadModel, GroupTagReadModel } from '../model/story-share';
+import type { GroupRow } from '@/lib/supabase';
+import type { GroupMemberWithCert, GroupTagEntry } from '../hooks/use-group-detail';
 
 type StoryShareCardProps = {
-  group: GroupReadModel;
-  tagEntry: GroupTagReadModel;
+  group: GroupRow;
+  tagEntry: GroupTagEntry;
   width: number;
 };
 
-function chunkMembers(members: GroupMemberShareCard[], columns: number) {
-  const rows: GroupMemberShareCard[][] = [];
+function chunkMembers(members: GroupMemberWithCert[], columns: number) {
+  const rows: GroupMemberWithCert[][] = [];
 
   for (let index = 0; index < members.length; index += columns) {
     rows.push(members.slice(index, index + columns));
@@ -33,19 +34,29 @@ function getColumnCount(memberCount: number) {
   return 4;
 }
 
+function getInitials(displayName: string) {
+  const trimmedName = displayName.trim();
+
+  if (!trimmedName) {
+    return '?';
+  }
+
+  return trimmedName.slice(0, 2);
+}
+
 export function StoryShareCard({ group, tagEntry, width }: StoryShareCardProps) {
   const height = width * (16 / 9);
   const columns = getColumnCount(tagEntry.members.length);
   const rows = chunkMembers(tagEntry.members, columns);
   const completionCopy =
-    tagEntry.thresholdState.status === 'archived'
+    tagEntry.thresholdState.status === 'expired'
       ? '오전 5시 마감 후 고정된 팀 기록'
       : '오전 5시 전까지 현재 화면이 계속 반영돼요';
 
   return (
     <View style={[styles.frame, { width, height }]}>
-      <View style={[styles.orb, styles.orbTop]} />
-      <View style={[styles.orb, styles.orbBottom]} />
+      <View style={[styles.paperBand, styles.paperBandTop]} />
+      <View style={[styles.paperBand, styles.paperBandBottom]} />
 
       <View style={styles.header}>
         <View style={styles.brandPill}>
@@ -69,39 +80,56 @@ export function StoryShareCard({ group, tagEntry, width }: StoryShareCardProps) 
           <Text style={styles.progressValue}>{tagEntry.shareProgressLabel}</Text>
         </View>
         <Text style={styles.progressTime}>
-          {formatTimestampLabel(tagEntry.thresholdState.archivedAt ?? tagEntry.thresholdState.unlockedAt)}
+          {formatTimestampLabel('unlocked_at' in tagEntry.thresholdState ? (tagEntry.thresholdState.finalized_at ?? tagEntry.thresholdState.unlocked_at ?? undefined) : undefined)}
         </Text>
       </View>
 
       <View style={styles.mosaic}>
         {rows.map((row, rowIndex) => (
           <View key={`row-${rowIndex}`} style={styles.mosaicRow}>
-            {row.map((member) => (
-              <View
-                key={member.memberId}
-                style={[
-                  styles.memberPanel,
-                  {
-                    backgroundColor: member.accentColor,
-                    opacity: member.isCertified ? 1 : 0.58,
-                  },
-                ]}>
-                <View style={styles.memberPanelTop}>
-                  <Text style={styles.memberEmoji}>{member.emoji}</Text>
-                  <View style={styles.memberStatePill}>
-                    <Text style={styles.memberStateText}>{member.isCertified ? 'done' : 'wait'}</Text>
+            {row.map((member, memberIndex) => {
+              const panelStyle = [
+                styles.memberPanel,
+                {
+                  backgroundColor: colors.surface.secondary,
+                  opacity: member.isCertified ? 1 : 0.58,
+                },
+              ];
+              const panelContent = (
+                <>
+                  <View style={styles.memberPanelTop}>
+                    <View style={styles.memberInitials}>
+                      <Text style={styles.memberInitialsText}>{getInitials(member.displayName)}</Text>
+                    </View>
+                    <View style={styles.memberStatePill}>
+                      <Text style={styles.memberStateText}>{member.isCertified ? 'done' : 'wait'}</Text>
+                    </View>
                   </View>
+                  <View style={styles.memberPanelBottom}>
+                    <Text numberOfLines={1} style={styles.memberName}>
+                      {member.displayName}
+                    </Text>
+                    <Text numberOfLines={2} style={styles.memberCaption}>
+                      {member.isCertified ? member.caption || '인증 완료' : '인증 대기 중'}
+                    </Text>
+                  </View>
+                </>
+              );
+
+              return member.imageUrl ? (
+                <ImageBackground
+                  imageStyle={styles.memberPanelImage}
+                  key={`${member.memberId}-${rowIndex}-${memberIndex}`}
+                  source={{ uri: member.imageUrl }}
+                  style={panelStyle}>
+                  {panelContent}
+                </ImageBackground>
+              ) : (
+                <View key={`${member.memberId}-${rowIndex}-${memberIndex}`} style={panelStyle}>
+                  {panelContent}
                 </View>
-                <View style={styles.memberPanelBottom}>
-                  <Text numberOfLines={1} style={styles.memberName}>
-                    {member.displayName}
-                  </Text>
-                  <Text numberOfLines={2} style={styles.memberCaption}>
-                    {member.isCertified ? member.caption : member.overlayComment ?? '인증 대기 중'}
-                  </Text>
-                </View>
-              </View>
-            ))}
+              );
+            })}
             {row.length < columns
               ? Array.from({ length: columns - row.length }).map((_, index) => (
                   <View key={`spacer-${rowIndex}-${index}`} style={styles.memberSpacer} />
@@ -121,31 +149,29 @@ export function StoryShareCard({ group, tagEntry, width }: StoryShareCardProps) 
 
 const styles = StyleSheet.create({
   frame: {
-    backgroundColor: '#FFF8F4',
-    borderColor: 'rgba(239, 139, 170, 0.22)',
+    backgroundColor: colors.bg.warm,
+    borderColor: colors.line.warm,
     borderRadius: radius.sheet,
     borderWidth: 1,
     gap: spacing.md,
     overflow: 'hidden',
     padding: spacing.lg,
   },
-  orb: {
+  paperBand: {
     position: 'absolute',
-    borderRadius: radius.pill,
+    height: 84,
+    left: -30,
+    right: -30,
+    transform: [{ rotate: '-7deg' }],
   },
-  orbTop: {
-    top: -86,
-    right: -78,
-    width: 190,
-    height: 190,
-    backgroundColor: 'rgba(156, 204, 232, 0.38)',
+  paperBandTop: {
+    top: 42,
+    backgroundColor: colors.brand.blushSoft,
   },
-  orbBottom: {
-    bottom: -118,
-    left: -88,
-    width: 230,
-    height: 230,
-    backgroundColor: 'rgba(239, 139, 170, 0.24)',
+  paperBandBottom: {
+    bottom: 96,
+    backgroundColor: colors.brand.secondarySoft,
+    transform: [{ rotate: '6deg' }],
   },
   header: {
     alignItems: 'center',
@@ -163,7 +189,7 @@ const styles = StyleSheet.create({
     color: colors.text.inverse,
     fontSize: 12,
     fontWeight: '900',
-    letterSpacing: 0.5,
+    letterSpacing: 0,
     textTransform: 'uppercase',
   },
   lifeDay: {
@@ -179,7 +205,7 @@ const styles = StyleSheet.create({
     color: colors.text.primary,
     fontSize: 32,
     fontWeight: '900',
-    letterSpacing: -1,
+    letterSpacing: 0,
     lineHeight: 37,
   },
   subtitle: {
@@ -190,8 +216,8 @@ const styles = StyleSheet.create({
   },
   progressPanel: {
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.78)',
-    borderColor: 'rgba(232, 221, 234, 0.92)',
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.soft,
     borderRadius: radius.card - 8,
     borderWidth: 1,
     flexDirection: 'row',
@@ -204,7 +230,7 @@ const styles = StyleSheet.create({
     color: colors.text.tertiary,
     fontSize: 10,
     fontWeight: '900',
-    letterSpacing: 0.6,
+    letterSpacing: 0,
   },
   progressValue: {
     color: colors.text.primary,
@@ -247,8 +273,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  memberEmoji: {
-    fontSize: 26,
+  memberPanelImage: {
+    borderRadius: radius.card - 10,
+  },
+  memberInitials: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.82)',
+    borderRadius: radius.pill,
+    height: 30,
+    justifyContent: 'center',
+    minWidth: 30,
+    paddingHorizontal: spacing.xs,
+  },
+  memberInitialsText: {
+    color: colors.text.primary,
+    fontSize: 11,
+    fontWeight: '900',
   },
   memberStatePill: {
     backgroundColor: 'rgba(255, 255, 255, 0.76)',
@@ -263,7 +303,10 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   memberPanelBottom: {
+    backgroundColor: 'rgba(255, 255, 255, 0.78)',
+    borderRadius: radius.input,
     gap: spacing.xxs,
+    padding: spacing.xs,
   },
   memberName: {
     color: colors.text.primary,
@@ -292,6 +335,6 @@ const styles = StyleSheet.create({
     color: colors.text.primary,
     fontSize: 18,
     fontWeight: '900',
-    letterSpacing: -0.3,
+    letterSpacing: 0,
   },
 });

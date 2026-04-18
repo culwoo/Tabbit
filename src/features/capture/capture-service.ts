@@ -7,8 +7,18 @@ import {
   resolveCertificationDraft,
   resolveGroupShareTargets,
   type GroupTagDirectoryEntry,
-  type ThresholdRule,
 } from '@/lib/domain';
+import {
+  addPersonalTag,
+  fetchActiveGroupMemberCounts,
+  fetchGroupTags,
+  fetchMyGroups,
+  fetchPersonalTags,
+  requireSupabase,
+  syncGroupTagsToPersonalTags,
+  uploadCertification,
+  type PersonalTagRow,
+} from '@/lib/supabase';
 import type {
   AcquireMediaResult,
   CaptureAsset,
@@ -23,73 +33,18 @@ import type {
   UploadProgressPhase,
 } from '@/features/capture/types';
 
-type CaptureGroup = {
-  id: string;
-  name: string;
-  memberCount: number;
-  thresholdRule: ThresholdRule;
-  tags: string[];
-};
-
 type SubmitCertificationError = Error & {
   code?: UploadErrorCode;
+  details?: string;
+  hint?: string;
+  originalCode?: string;
+  phase?: UploadProgressPhase;
+  statusCode?: string;
+  uploadStage?: string;
 };
 
-const captureGroups: CaptureGroup[] = [
-  {
-    id: 'focus-club',
-    name: '새벽 운동팟',
-    memberCount: 4,
-    thresholdRule: 'N_MINUS_1',
-    tags: ['#운동', '#아침루틴', '#헬스'],
-  },
-  {
-    id: 'study-room',
-    name: '집중 공부방',
-    memberCount: 5,
-    thresholdRule: 'N_MINUS_1',
-    tags: ['#공부', '#아침루틴', '#독서'],
-  },
-  {
-    id: 'wallet-keepers',
-    name: '무지출 지킴이',
-    memberCount: 6,
-    thresholdRule: 'N_MINUS_1',
-    tags: ['#무지출', '#집밥', '#기록'],
-  },
-  {
-    id: 'after-work-club',
-    name: '퇴근 후 루틴',
-    memberCount: 4,
-    thresholdRule: 'ALL',
-    tags: ['#운동', '#기록', '#스트레칭'],
-  },
-];
-
-const groupTagDirectory: GroupTagDirectoryEntry[] = captureGroups.flatMap((group) =>
-  group.tags.map((tagLabel) => {
-    const normalizedLabel = normalizeTagLabel(tagLabel);
-
-    return {
-      groupId: group.id,
-      groupName: group.name,
-      groupTagId: `${group.id}:${normalizedLabel}`,
-      label: formatTagLabel(tagLabel),
-      normalizedLabel,
-      memberCount: group.memberCount,
-      thresholdRule: group.thresholdRule,
-    };
-  }),
-);
-
-const storedSubmissions = new Map<string, CompletedUploadSummary>();
 const failedSubmissionKeys = new Set<string>();
-
-function wait(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
+const PERSONAL_TAG_ID_PREFIX = 'personal:';
 
 function createSubmissionKey(draft: CaptureDraft) {
   const sortedTags = [...draft.selectedTagIds].sort().join('|');
@@ -116,13 +71,270 @@ function normalizeAsset(asset: ImagePicker.ImagePickerAsset): CaptureAsset {
     fileName: asset.fileName ?? null,
     fileSize: asset.fileSize ?? null,
     mimeType: asset.mimeType ?? null,
+    base64: asset.base64 ?? null,
   };
 }
 
-function createError(code: UploadErrorCode, message: string): SubmitCertificationError {
+export function createPersonalCaptureTagId(personalTagId: string) {
+  return `${PERSONAL_TAG_ID_PREFIX}${personalTagId}`;
+}
+
+function isPersonalCaptureTagId(tagId: string) {
+  return tagId.startsWith(PERSONAL_TAG_ID_PREFIX);
+}
+
+function getPersonalTagIdFromCaptureTagId(tagId: string) {
+  return isPersonalCaptureTagId(tagId) ? tagId.slice(PERSONAL_TAG_ID_PREFIX.length) : null;
+}
+
+function getSelectedGroupTagLabels(tagIds: readonly string[]) {
+  return tagIds.filter((tagId) => !isPersonalCaptureTagId(tagId));
+}
+
+function resolveSelectedPersonalTags(
+  tagIds: readonly string[],
+  personalTags: readonly PersonalTagRow[],
+) {
+  const selectedGroupLabels = new Set(
+    getSelectedGroupTagLabels(tagIds).map(normalizeTagLabel).filter(Boolean),
+  );
+  const selectedIds = new Set(
+    tagIds
+      .map(getPersonalTagIdFromCaptureTagId)
+      .filter((tagId): tagId is string => Boolean(tagId)),
+  );
+
+  return personalTags.filter(
+    (tag) => selectedIds.has(tag.id) || selectedGroupLabels.has(tag.normalized_label),
+  );
+}
+
+const uploadErrorCodes = new Set<UploadErrorCode>([
+  'AUTH_REQUIRED',
+  'MISSING_ASSET',
+  'NO_TAGS',
+  'NO_TARGETS',
+  'PERMISSION_DENIED',
+  'IMAGE_PROCESSING_ERROR',
+  'IMAGE_READ_ERROR',
+  'STORAGE_UPLOAD_ERROR',
+  'DATABASE_ERROR',
+  'SUPABASE_CONFIG_ERROR',
+  'NETWORK_ERROR',
+  'UNKNOWN',
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readErrorField(error: unknown, field: string) {
+  if (!isRecord(error)) {
+    return null;
+  }
+
+  const value = error[field];
+
+  if (typeof value === 'string' || typeof value === 'number') {
+    return String(value);
+  }
+
+  return null;
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  return (
+    readErrorField(error, 'message') ??
+    readErrorField(error, 'error_description') ??
+    readErrorField(error, 'error') ??
+    '업로드를 완료하지 못했습니다.'
+  );
+}
+
+function stringifyUnknownError(error: unknown) {
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}`;
+  }
+
+  if (typeof error === 'string') {
+    return error;
+  }
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function mapUploadStageToCode(uploadStage: string | null): UploadErrorCode | null {
+  switch (uploadStage) {
+    case 'readImage':
+      return 'IMAGE_READ_ERROR';
+    case 'storageUpload':
+      return 'STORAGE_UPLOAD_ERROR';
+    case 'saveCertification':
+      return 'DATABASE_ERROR';
+    default:
+      return null;
+  }
+}
+
+function mapUploadStageToPhase(uploadStage: string | null): UploadProgressPhase | null {
+  switch (uploadStage) {
+    case 'readImage':
+    case 'storageUpload':
+      return 'uploadMedia';
+    case 'saveCertification':
+      return 'saveCertification/shareTargets';
+    default:
+      return null;
+  }
+}
+
+function inferSubmitErrorCode(error: unknown, message: string): UploadErrorCode {
+  const existingCode = readErrorField(error, 'code');
+  const uploadStage = readErrorField(error, 'uploadStage');
+  const stageCode = mapUploadStageToCode(uploadStage);
+  const statusCode = readErrorField(error, 'statusCode') ?? readErrorField(error, 'status');
+  const haystack = [
+    message,
+    existingCode,
+    statusCode,
+    readErrorField(error, 'details'),
+    readErrorField(error, 'hint'),
+    readErrorField(error, 'name'),
+    readErrorField(error, 'error'),
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  if (stageCode) {
+    return stageCode;
+  }
+
+  if (existingCode && uploadErrorCodes.has(existingCode as UploadErrorCode)) {
+    return existingCode as UploadErrorCode;
+  }
+
+  if (/Supabase 환경변수|missing Supabase|supabase.*env/i.test(haystack)) {
+    return 'SUPABASE_CONFIG_ERROR';
+  }
+
+  if (/network|fetch|timeout|offline/i.test(haystack)) {
+    return 'NETWORK_ERROR';
+  }
+
+  if (/storage|bucket|object|mime|upload|statusCode/i.test(haystack) || statusCode) {
+    return 'STORAGE_UPLOAD_ERROR';
+  }
+
+  if (/row-level|rls|policy|violates|constraint|relation|column|PGRST|42501|235\d\d|42P01/i.test(haystack)) {
+    return 'DATABASE_ERROR';
+  }
+
+  return 'UNKNOWN';
+}
+
+function createError(
+  code: UploadErrorCode,
+  message: string,
+  details?: string,
+  phase?: UploadProgressPhase,
+): SubmitCertificationError {
   const error = new Error(message) as SubmitCertificationError;
   error.code = code;
+  error.details = details;
+  error.phase = phase;
   return error;
+}
+
+async function resolveAuthenticatedUploadUserId(expectedUserId: string) {
+  const client = requireSupabase();
+  const { data: sessionData, error: sessionError } = await client.auth.getSession();
+
+  if (sessionError) {
+    throw createError(
+      'AUTH_REQUIRED',
+      'Supabase 세션을 확인하지 못했습니다. 다시 로그인한 뒤 인증을 공유해 주세요.',
+      `expectedUserId: ${expectedUserId}\nsessionError: ${stringifyUnknownError(sessionError)}`,
+      'prepareUpload',
+    );
+  }
+
+  const sessionUserId = sessionData.session?.user.id ?? null;
+  const { data: userData, error: userError } = await client.auth.getUser();
+  const verifiedUserId = userData.user?.id ?? null;
+
+  if (userError || !verifiedUserId) {
+    throw createError(
+      'AUTH_REQUIRED',
+      'Supabase 인증 세션이 만료됐습니다. 로그아웃 후 다시 로그인해 주세요.',
+      [
+        `expectedUserId: ${expectedUserId}`,
+        `sessionUserId: ${sessionUserId ?? 'null'}`,
+        userError ? `userError: ${stringifyUnknownError(userError)}` : null,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join('\n'),
+      'prepareUpload',
+    );
+  }
+
+  if (verifiedUserId !== expectedUserId) {
+    throw createError(
+      'AUTH_REQUIRED',
+      '앱 세션과 Supabase 인증 세션이 서로 다릅니다. 로그아웃 후 다시 로그인해 주세요.',
+      [
+        `expectedUserId: ${expectedUserId}`,
+        `sessionUserId: ${sessionUserId ?? 'null'}`,
+        `verifiedUserId: ${verifiedUserId}`,
+      ].join('\n'),
+      'prepareUpload',
+    );
+  }
+
+  return verifiedUserId;
+}
+
+function normalizeSubmitError(error: unknown): SubmitCertificationError {
+  if (error instanceof Error && uploadErrorCodes.has(readErrorField(error, 'code') as UploadErrorCode)) {
+    return error as SubmitCertificationError;
+  }
+
+  const message = getErrorMessage(error);
+  const uploadStage = readErrorField(error, 'uploadStage');
+  const statusCode = readErrorField(error, 'statusCode') ?? readErrorField(error, 'status');
+  const originalCode = readErrorField(error, 'originalCode') ?? readErrorField(error, 'code');
+  const hint = readErrorField(error, 'hint');
+  const detailLines = [
+    readErrorField(error, 'details'),
+    hint ? `hint: ${hint}` : null,
+    statusCode ? `statusCode: ${statusCode}` : null,
+    originalCode ? `originalCode: ${originalCode}` : null,
+    uploadStage ? `uploadStage: ${uploadStage}` : null,
+    `raw: ${stringifyUnknownError(error)}`,
+  ].filter((line): line is string => Boolean(line));
+  const normalizedError = createError(
+    inferSubmitErrorCode(error, message),
+    message,
+    detailLines.join('\n'),
+    mapUploadStageToPhase(uploadStage) ?? undefined,
+  );
+  normalizedError.hint = hint ?? undefined;
+  normalizedError.originalCode = originalCode ?? undefined;
+  normalizedError.statusCode = statusCode ?? undefined;
+  normalizedError.uploadStage = uploadStage ?? undefined;
+
+  return normalizedError;
 }
 
 function notifyPhase(
@@ -132,7 +344,47 @@ function notifyPhase(
   options?.onPhaseChange?.(phase);
 }
 
-export function getAvailableCaptureTags(): CaptureTagOption[] {
+export async function fetchCaptureTagDirectory(): Promise<GroupTagDirectoryEntry[]> {
+  const groups = await fetchMyGroups();
+  const groupIds = groups.map((group) => group.id);
+  const memberCounts = await fetchActiveGroupMemberCounts(groupIds);
+
+  const nestedEntries = await Promise.all(
+    groups.map(async (group) => {
+      const tags = await fetchGroupTags(group.id);
+      const memberCount = memberCounts.get(group.id) ?? 0;
+
+      return tags.map((tag): GroupTagDirectoryEntry => ({
+        groupId: group.id,
+        groupName: group.name,
+        groupTagId: tag.id,
+        label: formatTagLabel(tag.label),
+        normalizedLabel: tag.normalized_label || normalizeTagLabel(tag.label),
+        memberCount,
+        thresholdRule: group.threshold_rule,
+      }));
+    }),
+  );
+
+  return nestedEntries.flat();
+}
+
+export async function fetchCapturePersonalTags(userId?: string | null) {
+  if (userId) {
+    return syncGroupTagsToPersonalTags(userId);
+  }
+
+  return fetchPersonalTags();
+}
+
+export async function createCapturePersonalTag(userId: string, label: string) {
+  return addPersonalTag(userId, label);
+}
+
+export function getAvailableCaptureTagsFromDirectory(
+  groupTagDirectory: readonly GroupTagDirectoryEntry[],
+  personalTags: readonly PersonalTagRow[] = [],
+): CaptureTagOption[] {
   const tagMap = new Map<string, CaptureTagOption>();
 
   for (const tag of groupTagDirectory) {
@@ -146,21 +398,48 @@ export function getAvailableCaptureTags(): CaptureTagOption[] {
     tagMap.set(tag.normalizedLabel, {
       id: tag.normalizedLabel,
       label: tag.label,
+      kind: 'group',
       connectedGroupCount: 1,
     });
   }
 
-  return [...tagMap.values()].sort((left, right) => {
+  const groupOptions = [...tagMap.values()].sort((left, right) => {
     if (right.connectedGroupCount !== left.connectedGroupCount) {
       return right.connectedGroupCount - left.connectedGroupCount;
     }
 
     return left.label.localeCompare(right.label, 'ko');
   });
+
+  const personalOptions = personalTags
+    .map((tag): CaptureTagOption | null => {
+      const normalizedLabel = tag.normalized_label || normalizeTagLabel(tag.label);
+      const groupOption = tagMap.get(normalizedLabel);
+
+      if (groupOption) {
+        groupOption.personalTagId = tag.id;
+        return null;
+      }
+
+      return {
+        id: createPersonalCaptureTagId(tag.id),
+        label: formatTagLabel(tag.label),
+        kind: 'personal',
+        connectedGroupCount: 0,
+        personalTagId: tag.id,
+      };
+    })
+    .filter((tag): tag is CaptureTagOption => Boolean(tag))
+    .sort((left, right) => left.label.localeCompare(right.label, 'ko'));
+
+  return [...groupOptions, ...personalOptions];
 }
 
-export function resolveShareTargets(tagIds: string[]): ResolvedShareTarget[] {
-  return resolveGroupShareTargets(tagIds, groupTagDirectory);
+export function resolveShareTargets(
+  tagIds: string[],
+  groupTagDirectory: readonly GroupTagDirectoryEntry[],
+): ResolvedShareTarget[] {
+  return resolveGroupShareTargets(getSelectedGroupTagLabels(tagIds), groupTagDirectory);
 }
 
 export async function requestPermission(source: MediaSource): Promise<MediaPermissionState> {
@@ -195,9 +474,18 @@ export async function acquireMedia(source: MediaSource): Promise<AcquireMediaRes
 }
 
 export async function submitCertification(
+  userId: string | null,
   draft: CaptureDraft,
+  groupTagDirectory: readonly GroupTagDirectoryEntry[],
+  personalTags: readonly PersonalTagRow[],
   options?: SubmitCertificationOptions,
 ): Promise<CompletedUploadSummary> {
+  if (!userId) {
+    throw createError('AUTH_REQUIRED', '로그인이 필요합니다. 다시 로그인한 뒤 인증을 공유해 주세요.');
+  }
+
+  const authenticatedUserId = await resolveAuthenticatedUploadUserId(userId);
+
   if (!draft.asset) {
     throw createError('MISSING_ASSET', '공유할 사진이 없습니다.');
   }
@@ -206,73 +494,108 @@ export async function submitCertification(
     throw createError('NO_TAGS', '최소 1개 태그를 선택해야 합니다.');
   }
 
-  if (draft.resolvedTargets.length === 0) {
-    throw createError('NO_TARGETS', '선택한 태그와 연결된 그룹이 없습니다.');
-  }
-
   const submissionKey = createSubmissionKey(draft);
-  const existing = storedSubmissions.get(submissionKey);
+  const selectedGroupTagLabels = getSelectedGroupTagLabels(draft.selectedTagIds);
+  const selectedPersonalTags = resolveSelectedPersonalTags(draft.selectedTagIds, personalTags);
 
-  if (existing) {
-    return existing;
+  if (selectedGroupTagLabels.length === 0 && selectedPersonalTags.length === 0) {
+    throw createError('NO_TARGETS', '개인공간에 저장할 태그 또는 그룹에 연결된 태그가 필요합니다.');
   }
 
   notifyPhase(options, 'prepareUpload');
-  await wait(300);
 
   const resizeWidth = draft.asset.width > 1600 ? 1600 : draft.asset.width;
   const normalizedImage = await manipulateAsync(
     draft.asset.uri,
     resizeWidth !== draft.asset.width ? [{ resize: { width: resizeWidth } }] : [],
     {
+      base64: true,
       compress: 0.78,
       format: SaveFormat.JPEG,
     },
-  );
+  ).catch((error) => {
+    throw createError(
+      'IMAGE_PROCESSING_ERROR',
+      '이미지를 업로드용 JPEG로 변환하지 못했습니다.',
+      `raw: ${stringifyUnknownError(error)}`,
+      'prepareUpload',
+    );
+  });
+  const uploadAsset: CaptureAsset = {
+    ...draft.asset,
+    uri: normalizedImage.uri,
+    width: normalizedImage.width,
+    height: normalizedImage.height,
+    mimeType: 'image/jpeg',
+    base64: normalizedImage.base64 ?? null,
+  };
 
   notifyPhase(options, 'uploadMedia');
-  await wait(550);
 
   if (options?.simulateFailureOnce && !failedSubmissionKeys.has(submissionKey)) {
     failedSubmissionKeys.add(submissionKey);
     throw createError('NETWORK_ERROR', '네트워크가 불안정해서 업로드를 완료하지 못했습니다.');
   }
 
-  notifyPhase(options, 'saveCertification/shareTargets');
-  await wait(350);
-
   const createdAt = new Date().toISOString();
   const draftResolution = resolveCertificationDraft({
     command: {
-      imageAsset: draft.asset,
+      imageAsset: uploadAsset,
       caption: draft.caption,
-      personalTagLabels: [],
-      groupTagLabels: draft.selectedTagIds,
+      personalTagLabels: selectedPersonalTags.map((tag) => tag.label),
+      groupTagLabels: selectedGroupTagLabels,
     },
     createdAt,
     groupTagDirectory,
   });
 
-  if (draftResolution.resolvedGroupTargets.length === 0) {
+  if (draftResolution.resolvedGroupTargets.length === 0 && selectedPersonalTags.length === 0) {
     throw createError('NO_TARGETS', '선택한 태그와 연결된 그룹이 없습니다.');
   }
 
+  const groupShareTargets = draftResolution.resolvedGroupTargets.flatMap((target) =>
+    target.matchedGroupTagIds.map((groupTagId) => ({
+      groupId: target.groupId,
+      groupTagId,
+    })),
+  );
+
+  const cert = await uploadCertification(
+    {
+      userId: authenticatedUserId,
+      imageUri: uploadAsset.uri,
+      imageBase64: uploadAsset.base64,
+      imageWidth: uploadAsset.width,
+      imageHeight: uploadAsset.height,
+      caption: draftResolution.command.caption,
+      lifestyleDate: draftResolution.lifeDay.lifestyleDate,
+      editableUntil: draftResolution.lifeDay.editableUntil,
+      personalTagIds: selectedPersonalTags.map((tag) => tag.id),
+      groupShareTargets,
+    },
+    {
+      onStorageUploaded: () => {
+        notifyPhase(options, 'saveCertification/shareTargets');
+      },
+    },
+  ).catch((error) => {
+    throw normalizeSubmitError(error);
+  });
+
   const completedUpload: CompletedUploadSummary = {
-    certificationId: `cert-${Date.now()}`,
-    imageUri: normalizedImage.uri,
+    certificationId: cert.id,
+    imageUri: uploadAsset.uri,
     caption: draftResolution.command.caption,
     selectedTagIds: [...draft.selectedTagIds],
     personalTagLabels: draftResolution.command.personalTagLabels,
     groupTagLabels: draftResolution.command.groupTagLabels,
-    lifestyleDate: draftResolution.lifeDay.lifestyleDate,
-    editableUntil: draftResolution.lifeDay.editableUntil,
+    lifestyleDate: cert.lifestyle_date,
+    editableUntil: cert.editable_until,
     completedGroupCount: draftResolution.resolvedGroupTargets.length,
     targets: draftResolution.resolvedGroupTargets,
-    createdAt,
+    createdAt: cert.uploaded_at,
     command: draftResolution.command,
   };
-
-  storedSubmissions.set(submissionKey, completedUpload);
 
   return completedUpload;
 }

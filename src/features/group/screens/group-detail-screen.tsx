@@ -1,26 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View, ActivityIndicator } from 'react-native';
 
 import { Ionicons } from '@expo/vector-icons';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, useNavigation } from 'expo-router';
 import ViewShot from 'react-native-view-shot';
 
+import { AppHeader } from '@/components/shell/app-header';
 import { AppButton } from '@/components/ui/app-button';
 import { SoftCard } from '@/components/ui/soft-card';
 import { colors, radius, spacing, typography } from '@/constants/tokens';
 import { StoryMemberTile } from '@/features/group/components/story-member-tile';
 import { StoryShareModal } from '@/features/group/components/story-share-modal';
 import { exportStoryShare } from '@/features/group/lib/export-story-share';
-import type { GroupTagReadModel } from '@/features/group/model/story-share';
 import { formatLifeDayLabel, formatTimestampLabel, isArchiveLifeDay } from '@/lib/life-day';
 import { trackEvent } from '@/lib/monitoring';
-import {
-  getCurrentUserId,
-  selectGroupById,
-  selectSnapshot,
-  selectTagEntriesForGroup,
-  useStoryShareStore,
-} from '@/store/story-share-store';
+import { addGroupTag, deleteGroupTag } from '@/lib/supabase';
+import { useGroupDetail, type GroupTagEntry } from '../hooks/use-group-detail';
+import { useAppSession } from '@/providers/app-session-provider';
 
 function buildShareRoute(groupId: string, tagId: string, lifeDay?: string, shareMode?: boolean) {
   const query = new URLSearchParams();
@@ -35,12 +31,12 @@ function buildShareRoute(groupId: string, tagId: string, lifeDay?: string, share
   return `/groups/${groupId}?${query.toString()}`;
 }
 
-function renderStatusLabel(tagEntry: GroupTagReadModel) {
-  if (tagEntry.thresholdState.status === 'archived') {
+function renderStatusLabel(tagEntry: GroupTagEntry) {
+  if (tagEntry.thresholdState.status === 'expired') {
     return '아카이브 고정';
   }
 
-  if (tagEntry.thresholdState.status === 'unlocked') {
+  if (tagEntry.thresholdState.status === 'provisional_unlocked' || tagEntry.thresholdState.status === 'finalized') {
     return '공유 가능';
   }
 
@@ -48,74 +44,72 @@ function renderStatusLabel(tagEntry: GroupTagReadModel) {
 }
 
 export default function GroupDetailScreen() {
+  const navigation = useNavigation();
+  const { userId } = useAppSession();
   const params = useLocalSearchParams<{
     groupId: string;
     tagId?: string;
     lifeDay?: string;
     shareMode?: string;
   }>();
-  const state = useStoryShareStore();
+
   const viewShotRef = useRef<ViewShot | null>(null);
   const trackedUnlockKeys = useRef(new Set<string>());
 
-  const normalizedGroupId = Array.isArray(params.groupId) ? params.groupId[0] : params.groupId ?? 'focus-club';
+  const normalizedGroupId = Array.isArray(params.groupId) ? params.groupId[0] : params.groupId ?? '';
   const requestedLifeDay = Array.isArray(params.lifeDay) ? params.lifeDay[0] : params.lifeDay;
   const requestedShareMode = Array.isArray(params.shareMode) ? params.shareMode[0] : params.shareMode;
-  const group = selectGroupById(state, normalizedGroupId);
-  const tagEntries = selectTagEntriesForGroup(state, normalizedGroupId, requestedLifeDay);
+
+  const { errorMessage, loading, group, tagEntries, snapshots, lifeDay, refresh } = useGroupDetail(normalizedGroupId, requestedLifeDay);
 
   const requestedTagId = Array.isArray(params.tagId) ? params.tagId[0] : params.tagId;
   const defaultTagEntry =
     tagEntries.find((entry) => entry.tagId === requestedTagId) ??
-    tagEntries[0] ??
-    group?.currentTags[0];
+    tagEntries[0];
 
-  const [selectedTagId, setSelectedTagId] = useState(defaultTagEntry?.tagId ?? '');
+  const [selectedTagId, setSelectedTagId] = useState('');
+  const [newTagLabel, setNewTagLabel] = useState('');
+  const [isCreatingTag, setCreatingTag] = useState(false);
   const [isShareModeVisible, setShareModeVisible] = useState(false);
   const [isExporting, setExporting] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
 
-  const defaultTagId = defaultTagEntry?.tagId ?? '';
-
   useEffect(() => {
-    if (defaultTagId) {
-      setSelectedTagId(defaultTagId);
+    if (defaultTagEntry?.tagId && !selectedTagId) {
+      setSelectedTagId(defaultTagEntry.tagId);
     }
-  }, [defaultTagId]);
+  }, [defaultTagEntry?.tagId, selectedTagId]);
 
-  const selectedTag =
-    tagEntries.find((entry) => entry.tagId === selectedTagId) ?? defaultTagEntry ?? tagEntries[0];
+  const selectedTag = tagEntries.find((entry) => entry.tagId === selectedTagId) ?? defaultTagEntry ?? tagEntries[0];
 
-  const snapshot = selectedTag
-    ? selectSnapshot(state, normalizedGroupId, selectedTag.tagId, selectedTag.lifeDay)
-    : undefined;
+  const snapshot = selectedTag ? snapshots[selectedTag.tagId] : undefined;
+  const snapshotSavedAt = snapshot?.last_snapshot_exported_at ?? null;
 
   const isArchiveView = useMemo(() => {
     if (!group || !selectedTag) {
       return false;
     }
-
-    return isArchiveLifeDay(group.currentLifeDay, selectedTag.lifeDay);
-  }, [group, selectedTag]);
+    return isArchiveLifeDay(lifeDay, selectedTag.lifeDay); // using lifeDay hook result
+  }, [group, selectedTag, lifeDay]);
 
   useEffect(() => {
     if (!selectedTag) {
       return;
     }
 
-    const unlockKey = `${selectedTag.groupId}:${selectedTag.tagId}:${selectedTag.lifeDay}`;
+    const unlockKey = `${normalizedGroupId}:${selectedTag.tagId}:${selectedTag.lifeDay}`;
     if (selectedTag.thresholdState.status === 'locked' || trackedUnlockKeys.current.has(unlockKey)) {
       return;
     }
 
     trackedUnlockKeys.current.add(unlockKey);
     trackEvent('threshold_unlocked', {
-      groupId: selectedTag.groupId,
+      groupId: normalizedGroupId,
       tagId: selectedTag.tagId,
       lifeDay: selectedTag.lifeDay,
-      userId: getCurrentUserId(),
+      userId: userId!,
     });
-  }, [selectedTag]);
+  }, [selectedTag, normalizedGroupId, userId]);
 
   useEffect(() => {
     if (requestedShareMode !== '1' || !selectedTag?.shareEnabled) {
@@ -131,12 +125,12 @@ export default function GroupDetailScreen() {
     }
 
     trackEvent('share_mode_opened', {
-      userId: getCurrentUserId(),
-      groupId: selectedTag.groupId,
+      userId: userId!,
+      groupId: normalizedGroupId,
       tagId: selectedTag.tagId,
       lifeDay: selectedTag.lifeDay,
     });
-  }, [isShareModeVisible, selectedTag]);
+  }, [isShareModeVisible, selectedTag, normalizedGroupId, userId]);
 
   async function handleExport(shareAfterSave: boolean) {
     if (!selectedTag || !group || !viewShotRef.current) {
@@ -148,10 +142,10 @@ export default function GroupDetailScreen() {
 
     const result = await exportStoryShare({
       captureTarget: viewShotRef.current,
-      groupId: selectedTag.groupId,
+      groupId: normalizedGroupId,
       tagId: selectedTag.tagId,
       lifeDay: selectedTag.lifeDay,
-      exportedBy: getCurrentUserId(),
+      exportedBy: userId!,
       shareAfterSave,
     });
 
@@ -161,6 +155,8 @@ export default function GroupDetailScreen() {
       setShareError(result.message);
       return;
     }
+
+    await refresh();
 
     Alert.alert(
       '스토리 export 완료',
@@ -174,16 +170,136 @@ export default function GroupDetailScreen() {
     }
   }
 
-  if (!group || !selectedTag) {
+  function goHome() {
+    router.replace('/');
+  }
+
+  function handleBack() {
+    if (navigation.canGoBack()) {
+      router.back();
+      return;
+    }
+
+    goHome();
+  }
+
+  async function handleCreateGroupTag() {
+    const label = newTagLabel.trim();
+
+    if (!label || isCreatingTag) {
+      return;
+    }
+
+    setCreatingTag(true);
+
+    try {
+      const tag = await addGroupTag(normalizedGroupId, label, userId ?? undefined);
+      setNewTagLabel('');
+      setSelectedTagId(tag.id);
+      await refresh();
+    } catch (error) {
+      Alert.alert(
+        '태그 생성 실패',
+        error instanceof Error ? error.message : '그룹 태그를 만들지 못했습니다.',
+      );
+    } finally {
+      setCreatingTag(false);
+    }
+  }
+
+  function handleDeleteSelectedTag() {
+    if (!selectedTag) {
+      return;
+    }
+
+    Alert.alert(
+      '태그를 삭제할까요?',
+      `${selectedTag.tagLabel} 태그를 이 그룹에서 삭제합니다. 이미 인증에 사용된 태그는 삭제되지 않을 수 있습니다.`,
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '삭제',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteGroupTag(normalizedGroupId, selectedTag.tagId);
+              const nextTag = tagEntries.find((entry) => entry.tagId !== selectedTag.tagId);
+              setSelectedTagId(nextTag?.tagId ?? '');
+              await refresh();
+            } catch (error) {
+              Alert.alert(
+                '태그 삭제 실패',
+                error instanceof Error ? error.message : '태그를 삭제하지 못했습니다.',
+              );
+            }
+          },
+        },
+      ],
+    );
+  }
+
+  if (loading) {
     return (
       <View style={styles.screen}>
+        <AppHeader onBack={handleBack} title="그룹" variant="detail" />
+        <View style={styles.loadingCenter}>
+          <ActivityIndicator size="large" color={colors.brand.primary} />
+          <Text style={{ marginTop: spacing.sm, color: colors.text.secondary }}>데이터를 불러오는 중입니다...</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (!group) {
+    return (
+      <View style={styles.screen}>
+        <AppHeader onBack={handleBack} title="그룹" variant="detail" />
         <ScrollView contentContainerStyle={styles.container}>
           <SoftCard style={styles.fallbackCard} variant="empty">
             <Text style={styles.fallbackTitle}>그룹 데이터를 찾지 못했습니다.</Text>
             <Text style={styles.fallbackDescription}>
-              현재 mock 스토어에는 {normalizedGroupId} 데이터가 없습니다. 홈으로 돌아가 다시 진입해 주세요.
+              {errorMessage ?? `현재 ${normalizedGroupId || '선택한'} 그룹에 접근할 수 없습니다.`}
             </Text>
-            <AppButton label="홈으로 이동" onPress={() => router.replace('/(tabs)/index')} />
+            <AppButton label="다시 불러오기" onPress={() => void refresh()} variant="secondary" />
+            <AppButton label="홈으로 이동" onPress={goHome} />
+          </SoftCard>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  if (!selectedTag) {
+    return (
+      <View style={styles.screen}>
+        <AppHeader onBack={handleBack} title={group.name} variant="detail" />
+        <ScrollView
+          contentContainerStyle={styles.container}
+          contentInsetAdjustmentBehavior="automatic"
+          showsVerticalScrollIndicator={false}>
+          <SoftCard style={styles.fallbackCard} variant="empty">
+            <Text style={styles.fallbackTitle}>첫 태그를 만들어주세요.</Text>
+            <Text style={styles.fallbackDescription}>
+              그룹은 만들어졌고 접근도 가능합니다. 이제 인증에 사용할 태그를 하나 만들면 그룹 화면을 바로 사용할 수 있습니다.
+            </Text>
+            <View style={styles.tagCreator}>
+              <Text style={styles.inputLabel}>그룹 태그</Text>
+              <TextInput
+                value={newTagLabel}
+                onChangeText={setNewTagLabel}
+                editable={!isCreatingTag}
+                placeholder="예: #운동"
+                placeholderTextColor={colors.text.tertiary}
+                style={styles.textInput}
+                maxLength={24}
+                onSubmitEditing={() => void handleCreateGroupTag()}
+              />
+              <AppButton
+                label={isCreatingTag ? '태그 생성 중...' : '태그 만들기'}
+                onPress={() => void handleCreateGroupTag()}
+                disabled={!newTagLabel.trim() || isCreatingTag}
+              />
+            </View>
+            <AppButton label="홈으로 이동" onPress={goHome} variant="secondary" />
           </SoftCard>
         </ScrollView>
       </View>
@@ -192,6 +308,7 @@ export default function GroupDetailScreen() {
 
   return (
     <View style={styles.screen}>
+      <AppHeader onBack={handleBack} title={group.name} variant="detail" />
       <ScrollView
         contentContainerStyle={styles.container}
         contentInsetAdjustmentBehavior="automatic"
@@ -199,24 +316,24 @@ export default function GroupDetailScreen() {
         <SoftCard style={styles.heroCard} variant="group-space">
           <View style={styles.heroTopRow}>
             <View style={styles.heroCopy}>
-              <Text style={styles.heroEyebrow}>{isArchiveView ? 'Archive replay' : 'Group detail'}</Text>
+              <Text style={styles.heroEyebrow}>{isArchiveView ? 'Saved day' : 'Team room'}</Text>
               <Text style={styles.heroTitle}>
-                {group.emoji} {group.name}
+                {group.name}
               </Text>
-              <Text style={styles.heroDescription}>{group.description}</Text>
+              {group.description && <Text style={styles.heroDescription}>{group.description}</Text>}
             </View>
             <View style={styles.heroActions}>
               <Pressable
                 accessibilityLabel="홈으로 이동"
-                onPress={() => router.replace('/(tabs)/index')}
+                onPress={goHome}
                 style={styles.iconButton}>
-                <Ionicons color={colors.text.primary} name="home-outline" size={18} />
+                <Ionicons color={colors.text.inverse} name="home-outline" size={18} />
               </Pressable>
               <Pressable
                 accessibilityLabel="그룹 채팅 열기"
                 onPress={() => router.push(`/groups/chat/${normalizedGroupId}`)}
                 style={styles.iconButton}>
-                <Ionicons color={colors.text.primary} name="chatbubble-ellipses-outline" size={18} />
+                <Ionicons color={colors.text.inverse} name="chatbubble-ellipses-outline" size={18} />
               </Pressable>
             </View>
           </View>
@@ -227,7 +344,7 @@ export default function GroupDetailScreen() {
             </View>
             <View style={styles.lifeDayPill}>
               <Text style={styles.lifeDayPillText}>
-                {isArchiveView ? '오전 5시 후 아카이브' : '오전 5시 전 실시간 반영'}
+                {isArchiveView ? '마감 후 저장된 하루' : '오전 5시 전까지 반영'}
               </Text>
             </View>
           </View>
@@ -236,7 +353,7 @@ export default function GroupDetailScreen() {
         <SoftCard style={styles.shareCard} variant="empty">
           <View style={styles.shareCardHeader}>
             <View style={styles.shareCardCopy}>
-              <Text style={styles.shareCardTitle}>{selectedTag.tagLabel} 공유 상태</Text>
+              <Text style={styles.shareCardTitle}>{selectedTag.tagLabel} 오늘의 공유</Text>
               <Text style={styles.shareCardDescription}>{selectedTag.subtitle}</Text>
             </View>
             <View
@@ -244,7 +361,7 @@ export default function GroupDetailScreen() {
                 styles.statusChip,
                 selectedTag.thresholdState.status === 'locked'
                   ? styles.statusChipLocked
-                  : selectedTag.thresholdState.status === 'archived'
+                  : selectedTag.thresholdState.status === 'expired'
                     ? styles.statusChipArchive
                     : styles.statusChipReady,
               ]}>
@@ -254,26 +371,24 @@ export default function GroupDetailScreen() {
 
           <View style={styles.shareMetricsRow}>
             <View style={styles.metricBox}>
-              <Text style={styles.metricLabel}>진행 상태</Text>
+              <Text style={styles.metricLabel}>함께한 인원</Text>
               <Text style={styles.metricValue}>{selectedTag.shareProgressLabel}</Text>
             </View>
             <View style={styles.metricBox}>
-              <Text style={styles.metricLabel}>언락/마감 시점</Text>
+              <Text style={styles.metricLabel}>스토리 상태</Text>
               <Text style={styles.metricValue}>
-                {formatTimestampLabel(
-                  selectedTag.thresholdState.archivedAt ?? selectedTag.thresholdState.unlockedAt,
-                )}
+                {'unlocked_at' in selectedTag.thresholdState && selectedTag.thresholdState.unlocked_at ? '언락됨' : '진행 대기'}
               </Text>
             </View>
           </View>
 
-          {snapshot ? (
+          {snapshotSavedAt ? (
             <View style={styles.snapshotBanner}>
-              <Ionicons color={colors.brand.primary} name="images-outline" size={18} />
+                <Ionicons color={colors.brand.primary} name="images-outline" size={18} />
               <View style={styles.snapshotCopy}>
-                <Text style={styles.snapshotTitle}>저장된 스냅샷이 있습니다</Text>
+                <Text style={styles.snapshotTitle}>스토리 카드가 저장됐어요</Text>
                 <Text style={styles.snapshotDescription}>
-                  {formatTimestampLabel(snapshot.exportedAt)}에 저장됨 · 날짜 상세에서 다시 진입 가능
+                  {formatTimestampLabel(snapshotSavedAt)}에 승인됨
                 </Text>
               </View>
             </View>
@@ -290,15 +405,46 @@ export default function GroupDetailScreen() {
           />
         </SoftCard>
 
+        <SoftCard style={styles.tagManageCard} variant="empty">
+          <Text style={styles.feedTitle}>그룹 태그 관리</Text>
+          <Text style={styles.feedDescription}>
+            함께 인증할 루틴을 태그로 나눠두면 홈과 캘린더에서도 같은 흐름으로 정리됩니다.
+          </Text>
+          <View style={styles.tagCreator}>
+            <Text style={styles.inputLabel}>새 그룹 태그</Text>
+            <TextInput
+              value={newTagLabel}
+              onChangeText={setNewTagLabel}
+              editable={!isCreatingTag}
+              placeholder="예: #운동"
+              placeholderTextColor={colors.text.tertiary}
+              style={styles.textInput}
+              maxLength={24}
+              onSubmitEditing={() => void handleCreateGroupTag()}
+            />
+            <AppButton
+              label={isCreatingTag ? '태그 생성 중...' : '태그 추가'}
+              onPress={() => void handleCreateGroupTag()}
+              disabled={!newTagLabel.trim() || isCreatingTag}
+            />
+          </View>
+          <AppButton
+            label={`${selectedTag.tagLabel} 삭제`}
+            onPress={handleDeleteSelectedTag}
+            variant="secondary"
+            disabled={tagEntries.length === 0}
+          />
+        </SoftCard>
+
         <View style={styles.tagPicker}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             <View style={styles.tagPillRow}>
-              {tagEntries.map((entry) => {
+              {tagEntries.map((entry, entryIndex) => {
                 const isSelected = entry.tagId === selectedTag.tagId;
 
                 return (
                   <Pressable
-                    key={`${entry.tagId}-${entry.lifeDay}`}
+                    key={`${entry.tagId}-${entry.lifeDay}-${entryIndex}`}
                     onPress={() => setSelectedTagId(entry.tagId)}
                     style={[
                       styles.tagPill,
@@ -320,7 +466,7 @@ export default function GroupDetailScreen() {
         <SoftCard style={styles.feedIntroCard} variant="empty">
           <Text style={styles.feedTitle}>{selectedTag.title}</Text>
           <Text style={styles.feedDescription}>
-            Share Mode는 이 태그 화면 구성을 거의 그대로 사용하되, 9:16 안전영역과 상단 카피만 추가합니다.
+            멤버가 올린 인증이 이 태그 아래에 모이고, 조건을 채우면 바로 스토리 카드로 저장할 수 있어요.
           </Text>
           <View style={styles.inlineActions}>
             <AppButton
@@ -338,8 +484,8 @@ export default function GroupDetailScreen() {
         </SoftCard>
 
         <View style={styles.memberGrid}>
-          {selectedTag.members.map((member) => (
-            <View key={member.memberId} style={styles.memberGridItem}>
+          {selectedTag.members.map((member, memberIndex) => (
+            <View key={`${member.memberId}-${selectedTag.tagId}-${memberIndex}`} style={styles.memberGridItem}>
               <StoryMemberTile member={member} />
             </View>
           ))}
@@ -356,7 +502,7 @@ export default function GroupDetailScreen() {
               label="현재 생활일로 돌아가기"
               onPress={() =>
                 router.replace(
-                  buildShareRoute(normalizedGroupId, group.currentTags[0]?.tagId ?? selectedTag.tagId),
+                  buildShareRoute(normalizedGroupId, tagEntries[0]?.tagId ?? selectedTag.tagId),
                 )
               }
               variant="secondary"
@@ -365,22 +511,29 @@ export default function GroupDetailScreen() {
         ) : null}
       </ScrollView>
 
-      <StoryShareModal
-        captureRef={viewShotRef}
-        errorMessage={shareError}
-        group={group}
-        isExporting={isExporting}
-        onClose={() => setShareModeVisible(false)}
-        onSave={() => void handleExport(false)}
-        onSaveAndShare={() => void handleExport(true)}
-        tagEntry={selectedTag}
-        visible={isShareModeVisible}
-      />
+      {isShareModeVisible ? (
+        <StoryShareModal
+          captureRef={viewShotRef}
+          errorMessage={shareError}
+          group={group}
+          isExporting={isExporting}
+          onClose={() => setShareModeVisible(false)}
+          onSave={() => void handleExport(false)}
+          onSaveAndShare={() => void handleExport(true)}
+          tagEntry={selectedTag}
+          visible={isShareModeVisible}
+        />
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  loadingCenter: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   screen: {
     flex: 1,
     backgroundColor: colors.bg.canvas,
@@ -404,7 +557,28 @@ const styles = StyleSheet.create({
     fontSize: typography.body.fontSize,
     lineHeight: typography.body.lineHeight,
   },
+  tagCreator: {
+    gap: spacing.sm,
+  },
+  inputLabel: {
+    color: colors.text.secondary,
+    fontSize: typography.label.fontSize,
+    fontWeight: typography.label.fontWeight,
+  },
+  textInput: {
+    backgroundColor: colors.surface.tertiary,
+    borderColor: colors.line.soft,
+    borderRadius: radius.input,
+    borderWidth: 1,
+    color: colors.text.primary,
+    fontSize: typography.body.fontSize,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
   heroCard: {
+    backgroundColor: colors.surface.inverse,
+    borderColor: colors.brand.accent,
+    borderWidth: 2,
     gap: spacing.md,
   },
   heroTopRow: {
@@ -418,20 +592,19 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   heroEyebrow: {
-    color: colors.brand.primary,
+    color: colors.brand.butter,
     fontSize: 12,
     fontWeight: typography.eyebrow.fontWeight,
-    letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
   heroTitle: {
-    color: colors.text.primary,
+    color: colors.text.inverse,
     fontSize: typography.hero.fontSize,
     fontWeight: typography.hero.fontWeight,
     lineHeight: typography.hero.lineHeight,
   },
   heroDescription: {
-    color: colors.text.secondary,
+    color: '#E8DCEA',
     fontSize: typography.body.fontSize,
     lineHeight: typography.body.lineHeight,
   },
@@ -441,8 +614,8 @@ const styles = StyleSheet.create({
   },
   iconButton: {
     alignItems: 'center',
-    backgroundColor: colors.surface.primary,
-    borderColor: colors.line.soft,
+    backgroundColor: 'rgba(255, 249, 243, 0.12)',
+    borderColor: 'rgba(255, 249, 243, 0.22)',
     borderRadius: radius.pill,
     borderWidth: 1,
     height: 40,
@@ -455,8 +628,10 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   lifeDayPill: {
-    backgroundColor: colors.surface.primary,
+    backgroundColor: colors.brand.butterSoft,
+    borderColor: colors.brand.accent,
     borderRadius: radius.pill,
+    borderWidth: 1,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
@@ -466,6 +641,11 @@ const styles = StyleSheet.create({
     fontWeight: typography.label.fontWeight,
   },
   shareCard: {
+    backgroundColor: colors.bg.warm,
+    borderColor: colors.line.warm,
+    gap: spacing.md,
+  },
+  tagManageCard: {
     gap: spacing.md,
   },
   shareCardHeader: {
@@ -514,8 +694,10 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   metricBox: {
-    backgroundColor: colors.surface.secondary,
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.warm,
     borderRadius: radius.input,
+    borderWidth: 1,
     flex: 1,
     gap: spacing.xxs,
     minWidth: 140,
@@ -534,7 +716,9 @@ const styles = StyleSheet.create({
   },
   snapshotBanner: {
     alignItems: 'center',
-    backgroundColor: colors.brand.primarySoft,
+    backgroundColor: colors.brand.butterSoft,
+    borderColor: colors.line.warm,
+    borderWidth: 1,
     borderRadius: radius.input,
     flexDirection: 'row',
     gap: spacing.sm,

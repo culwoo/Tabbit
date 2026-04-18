@@ -1,8 +1,20 @@
-import { PropsWithChildren, createContext, useContext, useReducer } from 'react';
+import {
+  PropsWithChildren,
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useReducer,
+} from 'react';
 
 import {
   acquireMedia,
-  getAvailableCaptureTags,
+  createCapturePersonalTag,
+  createPersonalCaptureTagId,
+  fetchCapturePersonalTags,
+  fetchCaptureTagDirectory,
+  getAvailableCaptureTagsFromDirectory,
   requestPermission,
   resolveShareTargets,
   submitCertification,
@@ -18,6 +30,11 @@ import type {
   UploadJobState,
   UploadProgressPhase,
 } from '@/features/capture/types';
+import type { GroupTagDirectoryEntry } from '@/lib/domain';
+import type { PersonalTagRow } from '@/lib/supabase';
+import { useAppSession } from '@/providers/app-session-provider';
+
+type CaptureTagDirectoryStatus = 'idle' | 'loading' | 'ready' | 'failure';
 
 type CaptureSessionState = {
   stage: CaptureFlowStage;
@@ -26,10 +43,16 @@ type CaptureSessionState = {
   uploadJob: UploadJobState;
   lastCompletedUpload: CompletedUploadSummary | null;
   simulateFailureOnce: boolean;
+  tagDirectory: GroupTagDirectoryEntry[];
+  personalTags: PersonalTagRow[];
+  tagDirectoryStatus: CaptureTagDirectoryStatus;
+  tagDirectoryError: string | null;
 };
 
 type CaptureSessionValue = CaptureSessionState & {
   availableTags: CaptureTagOption[];
+  reloadCaptureTags: () => Promise<void>;
+  createPersonalTag: (label: string) => Promise<void>;
   openSourceSelector: () => void;
   requestAssetFromSource: (source: MediaSource, fallbackStage?: CaptureFlowStage) => Promise<void>;
   setCaption: (caption: string) => void;
@@ -59,6 +82,8 @@ const initialUploadJob: UploadJobState = {
   progressPhase: 'idle',
   retryCount: 0,
   errorCode: null,
+  errorPhase: null,
+  errorDetails: null,
 };
 
 const initialState: CaptureSessionState = {
@@ -68,6 +93,10 @@ const initialState: CaptureSessionState = {
   uploadJob: initialUploadJob,
   lastCompletedUpload: null,
   simulateFailureOnce: false,
+  tagDirectory: [],
+  personalTags: [],
+  tagDirectoryStatus: 'idle',
+  tagDirectoryError: null,
 };
 
 type CaptureSessionAction =
@@ -89,6 +118,8 @@ type CaptureSessionAction =
       type: 'FAIL_UPLOAD';
       message: string;
       errorCode: UploadErrorCode;
+      errorPhase: UploadProgressPhase | null;
+      errorDetails: string | null;
       retryCount: number;
     }
   | {
@@ -97,7 +128,12 @@ type CaptureSessionAction =
       retryCount: number;
     }
   | { type: 'RESET_FLOW'; nextStage?: CaptureFlowStage }
-  | { type: 'SET_SIMULATE_FAILURE_ONCE'; value: boolean };
+  | { type: 'SET_SIMULATE_FAILURE_ONCE'; value: boolean }
+  | { type: 'LOAD_TAG_DIRECTORY' }
+  | { type: 'SET_TAG_DIRECTORY'; directory: GroupTagDirectoryEntry[]; personalTags: PersonalTagRow[] }
+  | { type: 'ADD_PERSONAL_TAG'; tag: PersonalTagRow }
+  | { type: 'FAIL_TAG_DIRECTORY'; message: string }
+  | { type: 'RESET_TAG_DIRECTORY' };
 
 function isDraftDirty(draft: CaptureDraft) {
   return Boolean(
@@ -221,6 +257,8 @@ function captureSessionReducer(
           progressPhase: 'prepareUpload',
           retryCount: action.retryCount,
           errorCode: null,
+          errorPhase: null,
+          errorDetails: null,
         },
         draft: withDirtyDraft({
           ...state.draft,
@@ -250,6 +288,8 @@ function captureSessionReducer(
           progressPhase: state.uploadJob.progressPhase,
           retryCount: action.retryCount,
           errorCode: action.errorCode,
+          errorPhase: action.errorPhase,
+          errorDetails: action.errorDetails,
         },
         simulateFailureOnce: false,
       };
@@ -263,6 +303,8 @@ function captureSessionReducer(
           progressPhase: 'saveCertification/shareTargets',
           retryCount: action.retryCount,
           errorCode: null,
+          errorPhase: null,
+          errorDetails: null,
         },
         lastCompletedUpload: action.upload,
         simulateFailureOnce: false,
@@ -280,24 +322,126 @@ function captureSessionReducer(
         ...state,
         simulateFailureOnce: action.value,
       };
+    case 'LOAD_TAG_DIRECTORY':
+      return {
+        ...state,
+        tagDirectoryStatus: 'loading',
+        tagDirectoryError: null,
+      };
+    case 'SET_TAG_DIRECTORY': {
+      const nextResolvedTargets = resolveShareTargets(
+        state.draft.selectedTagIds,
+        action.directory,
+      );
+
+      return {
+        ...state,
+        tagDirectory: action.directory,
+        personalTags: action.personalTags,
+        tagDirectoryStatus: 'ready',
+        tagDirectoryError: null,
+        draft: withDirtyDraft({
+          ...state.draft,
+          resolvedTargets: nextResolvedTargets,
+        }),
+      };
+    }
+    case 'ADD_PERSONAL_TAG': {
+      const existingTags = state.personalTags.filter((tag) => tag.id !== action.tag.id);
+      const selectedTagId = createPersonalCaptureTagId(action.tag.id);
+      const selectedTagIds = state.draft.selectedTagIds.includes(selectedTagId)
+        ? state.draft.selectedTagIds
+        : [...state.draft.selectedTagIds, selectedTagId];
+      const nextResolvedTargets = resolveShareTargets(selectedTagIds, state.tagDirectory);
+
+      return {
+        ...state,
+        personalTags: [...existingTags, action.tag].sort((left, right) =>
+          left.label.localeCompare(right.label, 'ko'),
+        ),
+        tagDirectoryStatus: 'ready',
+        tagDirectoryError: null,
+        draft: withDirtyDraft({
+          ...state.draft,
+          selectedTagIds,
+          resolvedTargets: nextResolvedTargets,
+        }),
+      };
+    }
+    case 'FAIL_TAG_DIRECTORY':
+      return {
+        ...state,
+        tagDirectoryStatus: 'failure',
+        tagDirectoryError: action.message,
+      };
+    case 'RESET_TAG_DIRECTORY':
+      return {
+        ...state,
+        tagDirectory: [],
+        personalTags: [],
+        tagDirectoryStatus: 'idle',
+        tagDirectoryError: null,
+      };
     default:
       return state;
   }
 }
 
-function createInitialSelectedTags(selectedTagIds: string[]) {
+function createInitialSelectedTags(
+  selectedTagIds: string[],
+  groupTagDirectory: readonly GroupTagDirectoryEntry[],
+) {
   const deduped = [...new Set(selectedTagIds)];
   return {
     selectedTagIds: deduped,
-    resolvedTargets: resolveShareTargets(deduped),
+    resolvedTargets: resolveShareTargets(deduped, groupTagDirectory),
   };
 }
 
 const CaptureSessionContext = createContext<CaptureSessionValue | null>(null);
 
 export function CaptureSessionProvider({ children }: PropsWithChildren) {
+  const { userId } = useAppSession();
   const [state, dispatch] = useReducer(captureSessionReducer, initialState);
-  const availableTags = getAvailableCaptureTags();
+  const availableTags = useMemo(
+    () => getAvailableCaptureTagsFromDirectory(state.tagDirectory, state.personalTags),
+    [state.tagDirectory, state.personalTags],
+  );
+
+  const reloadCaptureTags = useCallback(async () => {
+    if (!userId) {
+      dispatch({ type: 'RESET_TAG_DIRECTORY' });
+      return;
+    }
+
+    dispatch({ type: 'LOAD_TAG_DIRECTORY' });
+
+    try {
+      const [directory, personalTags] = await Promise.all([
+        fetchCaptureTagDirectory(),
+        fetchCapturePersonalTags(userId),
+      ]);
+      dispatch({ type: 'SET_TAG_DIRECTORY', directory, personalTags });
+    } catch (error) {
+      dispatch({
+        type: 'FAIL_TAG_DIRECTORY',
+        message: normalizeCaptureSessionError(error),
+      });
+    }
+  }, [userId]);
+
+  const createPersonalTag = useCallback(async (label: string) => {
+    if (!userId) {
+      throw new Error('로그인이 필요합니다.');
+    }
+
+    const tag = await createCapturePersonalTag(userId, label);
+    dispatch({ type: 'ADD_PERSONAL_TAG', tag });
+  }, [userId]);
+
+  useEffect(() => {
+    void reloadCaptureTags();
+  }, [reloadCaptureTags]);
 
   async function requestAssetFromSource(
     source: MediaSource,
@@ -334,11 +478,15 @@ export function CaptureSessionProvider({ children }: PropsWithChildren) {
         asset: result.asset,
         sourceType: source,
       });
-    } catch {
+    } catch (error) {
+      console.log('[capture] Failed to prepare media asset', error);
+
       dispatch({
         type: 'FAIL_UPLOAD',
         message: '사진을 준비하는 중 문제가 생겼습니다. 다시 시도해 주세요.',
         errorCode: 'UNKNOWN',
+        errorPhase: 'prepareUpload',
+        errorDetails: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
         retryCount: state.uploadJob.retryCount,
       });
     }
@@ -347,16 +495,24 @@ export function CaptureSessionProvider({ children }: PropsWithChildren) {
   async function submitDraft() {
     const nextRetryCount =
       state.uploadJob.status === 'failure' ? state.uploadJob.retryCount + 1 : state.uploadJob.retryCount;
+    let currentUploadPhase: UploadProgressPhase = 'prepareUpload';
 
     dispatch({ type: 'START_UPLOAD', retryCount: nextRetryCount });
 
     try {
-      const upload = await submitCertification(state.draft, {
-        simulateFailureOnce: state.simulateFailureOnce,
-        onPhaseChange: (phase) => {
-          dispatch({ type: 'SET_UPLOAD_PHASE', phase });
+      const upload = await submitCertification(
+        userId,
+        state.draft,
+        state.tagDirectory,
+        state.personalTags,
+        {
+          simulateFailureOnce: state.simulateFailureOnce,
+          onPhaseChange: (phase) => {
+            currentUploadPhase = phase;
+            dispatch({ type: 'SET_UPLOAD_PHASE', phase });
+          },
         },
-      });
+      );
 
       dispatch({
         type: 'COMPLETE_UPLOAD',
@@ -364,12 +520,30 @@ export function CaptureSessionProvider({ children }: PropsWithChildren) {
         retryCount: nextRetryCount,
       });
     } catch (error) {
-      const normalizedError = error as Error & { code?: UploadErrorCode };
+      const normalizedError = error as Error & {
+        code?: UploadErrorCode;
+        details?: string;
+        phase?: UploadProgressPhase;
+      };
+      const errorPhase = normalizedError.phase ?? currentUploadPhase;
+      const message = normalizedError.message ?? '업로드를 완료하지 못했습니다.';
+      const errorCode = normalizedError.code ?? 'UNKNOWN';
+      const errorDetails = normalizedError.details ?? null;
+
+      console.log('[capture] Certification upload failed', {
+        code: errorCode,
+        phase: errorPhase,
+        message,
+        details: errorDetails,
+        error,
+      });
 
       dispatch({
         type: 'FAIL_UPLOAD',
-        message: normalizedError.message ?? '업로드를 완료하지 못했습니다.',
-        errorCode: normalizedError.code ?? 'UNKNOWN',
+        message,
+        errorCode,
+        errorPhase,
+        errorDetails,
         retryCount: nextRetryCount,
       });
     }
@@ -383,7 +557,7 @@ export function CaptureSessionProvider({ children }: PropsWithChildren) {
     const selectedTagIds = state.draft.selectedTagIds.includes(tagId)
       ? state.draft.selectedTagIds.filter((selectedTagId) => selectedTagId !== tagId)
       : [...state.draft.selectedTagIds, tagId];
-    const nextSelection = createInitialSelectedTags(selectedTagIds);
+    const nextSelection = createInitialSelectedTags(selectedTagIds, state.tagDirectory);
 
     dispatch({
       type: 'SET_SELECTED_TAGS',
@@ -429,6 +603,8 @@ export function CaptureSessionProvider({ children }: PropsWithChildren) {
       value={{
         ...state,
         availableTags,
+        reloadCaptureTags,
+        createPersonalTag,
         openSourceSelector,
         requestAssetFromSource,
         setCaption,
@@ -455,4 +631,12 @@ export function useCaptureSession() {
   }
 
   return value;
+}
+
+function normalizeCaptureSessionError(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return '인증 태그 정보를 불러오지 못했습니다.';
 }

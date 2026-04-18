@@ -3,7 +3,7 @@ import * as Sharing from 'expo-sharing';
 import { captureRef } from 'react-native-view-shot';
 
 import { captureHandledError, trackEvent } from '@/lib/monitoring';
-import { saveStoryShareSnapshot } from '@/store/story-share-store';
+import { saveStoryCardSnapshot, type StoryCardRow } from '@/lib/supabase';
 
 type ExportStoryShareParams = {
   captureTarget: Parameters<typeof captureRef>[0];
@@ -19,6 +19,7 @@ type ExportStoryShareResult =
       ok: true;
       imagePath: string;
       shared: boolean;
+      storyCard: StoryCardRow;
     }
   | {
       ok: false;
@@ -34,6 +35,11 @@ class StoryShareExportError extends Error {
     super(message);
     this.name = 'StoryShareExportError';
   }
+}
+
+function getExportPlatform() {
+  const expoOs = process.env.EXPO_OS;
+  return expoOs === 'android' || expoOs === 'ios' || expoOs === 'web' ? expoOs : 'unknown';
 }
 
 export async function exportStoryShare({
@@ -67,27 +73,30 @@ export async function exportStoryShare({
       throw new StoryShareExportError('캡처 이미지를 만들지 못했습니다.', 'capture');
     }
 
-    const permission = await MediaLibrary.requestPermissionsAsync();
+    const permission = await MediaLibrary.requestPermissionsAsync(true);
     if (!permission.granted) {
       throw new StoryShareExportError('이미지를 저장하려면 사진 보관함 권한이 필요합니다.', 'permission');
     }
 
     const asset = await MediaLibrary.createAssetAsync(capturedUri);
     const imagePath = asset.uri ?? capturedUri;
+    const layoutVersion = 'share-mode-v1';
 
-    saveStoryShareSnapshot({
+    let storyCard = await saveStoryCardSnapshot({
       groupId,
-      tagId,
-      lifeDay,
-      exportedBy,
-      exportedAt: new Date().toISOString(),
-      layoutVersion: 'share-mode-v1',
-      imagePath,
+      groupTagId: tagId,
+      lifestyleDate: lifeDay,
+      imageUri: imagePath,
+      assetId: asset.id,
+      layoutVersion,
+      shared: false,
+      platform: getExportPlatform(),
     });
 
     trackEvent('snapshot_saved', {
       ...baseContext,
       imagePath,
+      storyCardId: storyCard.id,
     });
 
     let shared = false;
@@ -103,6 +112,17 @@ export async function exportStoryShare({
         mimeType: 'image/png',
       });
       shared = true;
+      storyCard = await saveStoryCardSnapshot({
+        groupId,
+        groupTagId: tagId,
+        lifestyleDate: lifeDay,
+        imageUri: imagePath,
+        assetId: asset.id,
+        layoutVersion,
+        shared: true,
+        platform: getExportPlatform(),
+        incrementExportCount: false,
+      });
     }
 
     trackEvent('share_export_succeeded', {
@@ -114,6 +134,7 @@ export async function exportStoryShare({
       ok: true,
       imagePath,
       shared,
+      storyCard,
     };
   } catch (error) {
     const exportError =

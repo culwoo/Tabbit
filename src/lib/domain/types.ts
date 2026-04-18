@@ -129,6 +129,9 @@ export type StoryCard = {
   version: number;
   unlockedAt?: string | null;
   finalizedAt?: string | null;
+  contributorUserIds: string[];
+  certificationIds: string[];
+  updatedAt: string;
 };
 
 export type NotificationEntity = {

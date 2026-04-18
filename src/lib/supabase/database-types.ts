@@ -45,9 +45,20 @@ export type GroupTagRow = {
   updated_at: string;
 };
 
+export type PersonalTagRow = {
+  id: string;
+  user_id: string;
+  label: string;
+  normalized_label: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type CertificationRow = {
   id: string;
   user_id: string;
+  image_bucket: 'certifications';
+  image_path: string | null;
   image_url: string;
   image_width: number;
   image_height: number;
@@ -91,6 +102,17 @@ export type StoryCardRow = {
   version: number;
   unlocked_at: string | null;
   finalized_at: string | null;
+  contributor_user_ids: string[];
+  certification_ids: string[];
+  last_snapshot_image_uri: string | null;
+  last_snapshot_asset_id: string | null;
+  last_snapshot_exported_by: string | null;
+  last_snapshot_exported_at: string | null;
+  last_snapshot_shared_at: string | null;
+  last_snapshot_layout_version: string | null;
+  last_snapshot_platform: 'android' | 'ios' | 'web' | 'unknown' | null;
+  snapshot_export_count: number;
+  updated_at: string;
 };
 
 export type NotificationRow = {
@@ -100,6 +122,31 @@ export type NotificationRow = {
   payload: Record<string, unknown>;
   read_at: string | null;
   created_at: string;
+};
+
+export type PushTokenRow = {
+  id: string;
+  user_id: string;
+  expo_push_token: string;
+  platform: 'android' | 'ios' | 'web' | 'unknown';
+  device_id: string;
+  created_at: string;
+  updated_at: string;
+  last_seen_at: string;
+  disabled_at: string | null;
+};
+
+export type PushNotificationDeliveryRow = {
+  id: string;
+  notification_id: string;
+  user_id: string;
+  status: 'pending' | 'sent' | 'failed' | 'skipped';
+  attempts: number;
+  receipt_id: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  sent_at: string | null;
 };
 
 export type ChatMessageRow = {

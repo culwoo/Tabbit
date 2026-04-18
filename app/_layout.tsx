@@ -1,4 +1,5 @@
-import { Stack } from 'expo-router';
+import { Stack, router, useSegments } from 'expo-router';
+import { useEffect } from 'react';
 import 'react-native-reanimated';
 
 import { AppErrorBoundary } from '@/components/shell/app-error-boundary';
@@ -15,24 +16,34 @@ const stackScreenOptions = {
 
 function RootNavigator() {
   const { bootstrapState } = useAppSession();
+  const segments = useSegments();
+  const firstSegment = segments[0];
+  const isAuthRoute = firstSegment === '(auth)' || firstSegment === 'sign-in';
+
+  useEffect(() => {
+    if (bootstrapState === 'checking') {
+      return;
+    }
+
+    if (bootstrapState === 'signed-out' && !isAuthRoute) {
+      router.replace('/sign-in');
+      return;
+    }
+
+    if (bootstrapState === 'signed-in' && isAuthRoute) {
+      router.replace('/');
+    }
+  }, [bootstrapState, isAuthRoute]);
 
   if (bootstrapState === 'checking') {
     return <BootstrapScreen />;
-  }
-
-  if (bootstrapState === 'signed-out') {
-    return (
-      <Stack screenOptions={stackScreenOptions}>
-        <Stack.Screen name="index" />
-        <Stack.Screen name="(auth)" />
-      </Stack>
-    );
   }
 
   return (
     <CaptureSessionProvider>
       <Stack screenOptions={stackScreenOptions}>
         <Stack.Screen name="index" />
+        <Stack.Screen name="(auth)" />
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="personal/index" />
           <Stack.Screen name="groups/[groupId]" />

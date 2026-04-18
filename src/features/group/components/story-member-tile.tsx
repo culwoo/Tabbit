@@ -1,18 +1,61 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { ImageBackground, StyleSheet, Text, View } from 'react-native';
 
 import { SoftCard } from '@/components/ui/soft-card';
 import { colors, radius, spacing, typography } from '@/constants/tokens';
 import { formatTimestampLabel } from '@/lib/life-day';
 
-import type { GroupMemberShareCard } from '../model/story-share';
+import type { GroupMemberWithCert } from '../hooks/use-group-detail';
 
 type StoryMemberTileProps = {
-  member: GroupMemberShareCard;
+  member: GroupMemberWithCert;
   mode?: 'feed' | 'share';
 };
 
+function getInitials(displayName: string) {
+  const trimmedName = displayName.trim();
+
+  if (!trimmedName) {
+    return '?';
+  }
+
+  return trimmedName.slice(0, 2);
+}
+
 export function StoryMemberTile({ member, mode = 'feed' }: StoryMemberTileProps) {
   const isShareMode = mode === 'share';
+  const posterStyle = [
+    styles.poster,
+    {
+      backgroundColor: colors.surface.secondary,
+      minHeight: isShareMode ? 180 : 136,
+    },
+  ];
+  const posterContent = (
+    <>
+      <View style={styles.posterHeader}>
+        <View style={styles.avatarMark}>
+          <Text style={styles.avatarMarkText}>{getInitials(member.displayName)}</Text>
+        </View>
+        <View
+          style={[
+            styles.statusPill,
+            {
+              backgroundColor: member.isCertified ? colors.surface.primary : colors.surface.secondary,
+            },
+          ]}>
+          <Text
+            style={[
+              styles.statusLabel,
+              {
+                color: member.isCertified ? colors.text.primary : colors.text.secondary,
+              },
+            ]}>
+            {member.isCertified ? '인증 완료' : '대기 중'}
+          </Text>
+        </View>
+      </View>
+    </>
+  );
 
   return (
     <SoftCard
@@ -22,40 +65,16 @@ export function StoryMemberTile({ member, mode = 'feed' }: StoryMemberTileProps)
         !member.isCertified && styles.pendingCard,
       ]}
       variant="empty">
-      <View
-        style={[
-          styles.poster,
-          {
-            backgroundColor: member.accentColor,
-            minHeight: isShareMode ? 180 : 136,
-          },
-        ]}>
-        <View style={styles.posterHeader}>
-          <Text style={styles.posterEmoji}>{member.emoji}</Text>
-          <View
-            style={[
-              styles.statusPill,
-              {
-                backgroundColor: member.isCertified ? colors.surface.primary : colors.surface.secondary,
-              },
-            ]}>
-            <Text
-              style={[
-                styles.statusLabel,
-                {
-                  color: member.isCertified ? colors.text.primary : colors.text.secondary,
-                },
-              ]}>
-              {member.isCertified ? '인증 완료' : '대기 중'}
-            </Text>
-          </View>
-        </View>
-        {member.overlayComment ? (
-          <View style={styles.overlayComment}>
-            <Text style={styles.overlayCommentText}>{member.overlayComment}</Text>
-          </View>
-        ) : null}
-      </View>
+      {member.imageUrl ? (
+        <ImageBackground
+          imageStyle={styles.posterImage}
+          source={{ uri: member.imageUrl }}
+          style={posterStyle}>
+          {posterContent}
+        </ImageBackground>
+      ) : (
+        <View style={posterStyle}>{posterContent}</View>
+      )}
       <View style={styles.copy}>
         <View style={styles.copyHeader}>
           <Text style={styles.name}>{member.displayName}</Text>
@@ -65,7 +84,7 @@ export function StoryMemberTile({ member, mode = 'feed' }: StoryMemberTileProps)
           {member.isCertified ? member.caption ?? '오늘의 인증을 남겼어요.' : '아직 이 태그 인증을 올리지 않았어요.'}
         </Text>
         <Text style={styles.timestamp}>
-          {member.isCertified ? formatTimestampLabel(member.completedAt) : '오전 5시 전까지 반영 가능'}
+          {member.isCertified ? formatTimestampLabel(member.uploadedAt) : '오전 5시 전까지 반영 가능'}
         </Text>
       </View>
     </SoftCard>
@@ -87,6 +106,8 @@ const styles = StyleSheet.create({
     opacity: 0.78,
   },
   poster: {
+    borderColor: colors.line.soft,
+    borderWidth: 1,
     borderRadius: radius.card - 8,
     justifyContent: 'space-between',
     overflow: 'hidden',
@@ -97,8 +118,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  posterEmoji: {
-    fontSize: 24,
+  posterImage: {
+    borderRadius: radius.card - 8,
+  },
+  avatarMark: {
+    alignItems: 'center',
+    backgroundColor: colors.surface.primary,
+    borderRadius: radius.pill,
+    height: 34,
+    justifyContent: 'center',
+    minWidth: 34,
+    paddingHorizontal: spacing.xs,
+  },
+  avatarMarkText: {
+    color: colors.text.primary,
+    fontSize: 12,
+    fontWeight: typography.label.fontWeight,
   },
   statusPill: {
     borderRadius: radius.pill,
@@ -108,20 +143,6 @@ const styles = StyleSheet.create({
   statusLabel: {
     fontSize: 12,
     fontWeight: typography.label.fontWeight,
-  },
-  overlayComment: {
-    alignSelf: 'flex-start',
-    backgroundColor: colors.surface.primary,
-    borderRadius: 16,
-    maxWidth: '84%',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-  },
-  overlayCommentText: {
-    color: colors.text.primary,
-    fontSize: 12,
-    fontWeight: typography.label.fontWeight,
-    lineHeight: 16,
   },
   copy: {
     gap: spacing.xs,

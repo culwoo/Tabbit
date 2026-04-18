@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useNavigation } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
@@ -29,6 +29,7 @@ const thresholdOptions: { value: ThresholdOption; label: string; desc: string }[
 ];
 
 export default function GroupEntryScreen() {
+  const navigation = useNavigation();
   const { userId } = useAppSession();
   const [mode, setMode] = useState<Mode>('menu');
   const [loading, setLoading] = useState(false);
@@ -40,6 +41,15 @@ export default function GroupEntryScreen() {
 
   // 참여 폼
   const [inviteCode, setInviteCode] = useState('');
+
+  const handleClose = useCallback(() => {
+    if (navigation.canGoBack()) {
+      router.back();
+      return;
+    }
+
+    router.replace('/');
+  }, [navigation]);
 
   const handleCreate = useCallback(async () => {
     if (!groupName.trim() || !userId) return;
@@ -85,17 +95,17 @@ export default function GroupEntryScreen() {
 
   return (
     <View style={styles.overlay}>
-      <Pressable accessibilityLabel="닫기" onPress={() => router.back()} style={StyleSheet.absoluteFill} />
+      <Pressable accessibilityLabel="닫기" onPress={handleClose} style={StyleSheet.absoluteFill} />
       <View style={styles.sheetWrap}>
         <SoftCard style={styles.sheet} variant="empty">
           {/* 헤더 */}
           <View style={styles.headerRow}>
             <View style={styles.headerCopy}>
               <Text style={styles.eyebrow}>
-                {mode === 'menu' ? 'Group actions' : mode === 'create' ? '새 그룹' : '그룹 참여'}
+                {mode === 'menu' ? 'Team setup' : mode === 'create' ? '새 그룹' : '그룹 참여'}
               </Text>
               <Text style={styles.title}>
-                {mode === 'menu' ? '그룹 생성 / 참여' : mode === 'create' ? '그룹 만들기' : '초대 코드 입력'}
+                {mode === 'menu' ? '같이 인증할 공간 만들기' : mode === 'create' ? '그룹 만들기' : '초대 코드 입력'}
               </Text>
             </View>
             {mode !== 'menu' ? (
@@ -108,7 +118,7 @@ export default function GroupEntryScreen() {
                 <Ionicons color={colors.text.secondary} name="arrow-back" size={18} />
               </TouchableOpacity>
             ) : null}
-            <AppButton label="닫기" onPress={() => router.back()} variant="secondary" />
+            <AppButton icon="close" label="닫기" onPress={handleClose} variant="secondary" />
           </View>
 
           {/* 메뉴 */}
@@ -124,7 +134,7 @@ export default function GroupEntryScreen() {
                 <Ionicons color={colors.brand.primary} name="add-circle" size={24} />
                 <View style={styles.optionCopy}>
                   <Text style={styles.optionTitle}>그룹 만들기</Text>
-                  <Text style={styles.optionDescription}>이름, 설명, 임계값을 설정하고 초대 코드를 받아요</Text>
+                  <Text style={styles.optionDescription}>이름과 언락 기준을 정하고 친구를 초대해요</Text>
                 </View>
                 <Ionicons color={colors.text.tertiary} name="chevron-forward" size={18} />
               </TouchableOpacity>
@@ -139,7 +149,7 @@ export default function GroupEntryScreen() {
                 <Ionicons color={colors.brand.secondary} name="enter" size={24} />
                 <View style={styles.optionCopy}>
                   <Text style={styles.optionTitle}>초대 코드로 참여</Text>
-                  <Text style={styles.optionDescription}>친구에게 받은 코드를 입력하세요</Text>
+                  <Text style={styles.optionDescription}>친구에게 받은 코드를 입력하고 바로 합류해요</Text>
                 </View>
                 <Ionicons color={colors.text.tertiary} name="chevron-forward" size={18} />
               </TouchableOpacity>
@@ -257,6 +267,8 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   sheet: {
+    backgroundColor: colors.bg.warm,
+    borderColor: colors.line.warm,
     borderBottomLeftRadius: 0,
     borderBottomRightRadius: 0,
     gap: spacing.lg,
@@ -274,10 +286,9 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   eyebrow: {
-    color: colors.brand.primary,
+    color: colors.brand.accent,
     fontSize: typography.eyebrow.fontSize,
     fontWeight: typography.eyebrow.fontWeight,
-    letterSpacing: 0.8,
     lineHeight: typography.eyebrow.lineHeight,
     textTransform: 'uppercase',
   },
@@ -302,8 +313,8 @@ const styles = StyleSheet.create({
   },
   optionItem: {
     alignItems: 'center',
-    backgroundColor: colors.surface.tertiary,
-    borderColor: colors.line.soft,
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.warm,
     borderRadius: radius.input,
     borderWidth: 1,
     flexDirection: 'row',
@@ -338,8 +349,8 @@ const styles = StyleSheet.create({
     fontWeight: typography.label.fontWeight,
   },
   textInput: {
-    backgroundColor: colors.surface.tertiary,
-    borderColor: colors.line.soft,
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.warm,
     borderRadius: radius.input,
     borderWidth: 1,
     color: colors.text.primary,
@@ -355,7 +366,7 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   thresholdChip: {
-    backgroundColor: colors.surface.tertiary,
+    backgroundColor: colors.surface.raised,
     borderColor: colors.line.soft,
     borderRadius: radius.input,
     borderWidth: 1,
@@ -363,8 +374,8 @@ const styles = StyleSheet.create({
     padding: spacing.sm,
   },
   thresholdChipSelected: {
-    backgroundColor: colors.brand.primarySoft,
-    borderColor: colors.brand.primary,
+    backgroundColor: colors.brand.butterSoft,
+    borderColor: colors.brand.accent,
   },
   thresholdChipLabel: {
     color: colors.text.primary,
@@ -372,7 +383,7 @@ const styles = StyleSheet.create({
     fontWeight: typography.bodyStrong.fontWeight,
   },
   thresholdChipLabelSelected: {
-    color: colors.brand.primary,
+    color: colors.text.primary,
   },
   thresholdChipDesc: {
     color: colors.text.secondary,

@@ -3,6 +3,20 @@ import type { ThresholdStateRow, StoryCardRow } from './database-types';
 
 const db = () => requireSupabase();
 
+type StoryCardSnapshotPlatform = NonNullable<StoryCardRow['last_snapshot_platform']>;
+
+type SaveStoryCardSnapshotParams = {
+  groupId: string;
+  groupTagId: string;
+  lifestyleDate: string;
+  imageUri: string;
+  assetId?: string | null;
+  layoutVersion: string;
+  shared: boolean;
+  platform?: StoryCardSnapshotPlatform;
+  incrementExportCount?: boolean;
+};
+
 // ── 그룹+태그+생활일 기준 임계값 상태 조회 ──
 
 export async function fetchThresholdState(
@@ -76,6 +90,33 @@ export async function fetchGroupStoryCards(groupId: string, limit = 20) {
 }
 
 // ── 임계값 변경 실시간 구독 ──
+
+export async function saveStoryCardSnapshot({
+  groupId,
+  groupTagId,
+  lifestyleDate,
+  imageUri,
+  assetId,
+  layoutVersion,
+  shared,
+  platform = 'unknown',
+  incrementExportCount = true,
+}: SaveStoryCardSnapshotParams) {
+  const { data, error } = await db().rpc('save_story_card_snapshot', {
+    p_group_id: groupId,
+    p_group_tag_id: groupTagId,
+    p_lifestyle_date: lifestyleDate,
+    p_image_uri: imageUri,
+    p_asset_id: assetId ?? null,
+    p_layout_version: layoutVersion,
+    p_shared: shared,
+    p_platform: platform,
+    p_increment_export_count: incrementExportCount,
+  });
+
+  if (error) throw error;
+  return data as StoryCardRow;
+}
 
 export function subscribeToThresholdChanges(
   groupId: string,

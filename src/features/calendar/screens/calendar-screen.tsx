@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -9,7 +9,8 @@ import { AppButton } from '@/components/ui/app-button';
 import { SoftCard } from '@/components/ui/soft-card';
 import { colors, radius, spacing, typography } from '@/constants/tokens';
 import { formatLifeDayLabel } from '@/lib/life-day';
-import { selectCalendarSummaries, useStoryShareStore } from '@/store/story-share-store';
+import { resolveLifestyleDate } from '@/lib/domain';
+import { useCalendarSummaries } from '../hooks/use-calendar-summaries';
 
 function buildMonthCells(anchorDate: string) {
   const [yearText, monthText] = anchorDate.split('-');
@@ -44,9 +45,10 @@ function buildMonthCells(anchorDate: string) {
 const weekLabels = ['일', '월', '화', '수', '목', '금', '토'];
 
 export default function CalendarScreen() {
-  const store = useStoryShareStore();
-  const summaries = selectCalendarSummaries(store);
-  const [selectedDate, setSelectedDate] = useState(summaries[0]?.date ?? '2026-04-15');
+  const { errorMessage, loading, refresh, summaries } = useCalendarSummaries();
+  const [selectedDateState, setSelectedDateState] = useState<string | null>(null);
+
+  const selectedDate = selectedDateState ?? summaries[0]?.date ?? resolveLifestyleDate(new Date());
 
   const summaryMap = useMemo(() => new Map(summaries.map((summary) => [summary.date, summary])), [summaries]);
   const selectedSummary = summaryMap.get(selectedDate);
@@ -73,18 +75,32 @@ export default function CalendarScreen() {
 
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         <SoftCard style={styles.heroCard} variant="empty">
-          <Text style={styles.heroEyebrow}>Reflection calendar</Text>
-          <Text style={styles.heroTitle}>언락과 저장 기록을 날짜로 다시 보기</Text>
+          <Text style={styles.heroEyebrow}>Memory calendar</Text>
+          <Text style={styles.heroTitle}>같이 채운 날들을 모아보기</Text>
           <Text style={styles.heroDescription}>
-            인증을 달성한 날짜와 실제 스냅샷을 저장한 날짜를 구분해서 보여줍니다. 오늘 언락됐더라도 export 전에는
-            스냅샷 표시가 생기지 않습니다.
+            그룹 언락, 저장된 스토리, 개인공간 기록을 날짜별로 차분히 꺼내볼 수 있어요.
           </Text>
         </SoftCard>
+
+        {loading ? (
+          <SoftCard style={styles.stateCard} variant="empty">
+            <ActivityIndicator color={colors.brand.primary} />
+            <Text style={styles.stateCopy}>캘린더 기록을 불러오는 중입니다.</Text>
+          </SoftCard>
+        ) : null}
+
+        {!loading && errorMessage ? (
+          <SoftCard style={styles.stateCard} variant="empty">
+            <Ionicons color={colors.status.danger} name="alert-circle-outline" size={22} />
+            <Text selectable style={styles.stateCopy}>{errorMessage}</Text>
+            <AppButton label="다시 불러오기" onPress={() => void refresh()} variant="secondary" />
+          </SoftCard>
+        ) : null}
 
         <SoftCard style={styles.calendarCard} variant="empty">
           <View style={styles.calendarHeader}>
             <Text style={styles.calendarMonth}>{monthLabel}</Text>
-            <Text style={styles.calendarLegend}>언락은 초록 점, 스냅샷 저장은 핑크 점으로 표시</Text>
+            <Text style={styles.calendarLegend}>초록 점은 언락, 보라 점은 저장된 스토리</Text>
           </View>
 
           <View style={styles.weekRow}>
@@ -107,7 +123,7 @@ export default function CalendarScreen() {
               return (
                 <Pressable
                   key={cell.key}
-                  onPress={() => setSelectedDate(cell.date!)}
+                  onPress={() => setSelectedDateState(cell.date!)}
                   style={[
                     styles.dayCell,
                     isSelected ? styles.dayCellSelected : styles.dayCellIdle,
@@ -148,20 +164,24 @@ export default function CalendarScreen() {
 
         <SoftCard style={styles.listCard} variant="empty">
           <Text style={styles.listTitle}>최근 하이라이트</Text>
-          <View style={styles.highlightList}>
-            {summaries.slice(0, 4).map((summary) => (
-              <Pressable
-                key={summary.date}
-                onPress={() => setSelectedDate(summary.date)}
-                style={styles.highlightRow}>
-                <View>
-                  <Text style={styles.highlightDate}>{formatLifeDayLabel(summary.date)}</Text>
-                  <Text style={styles.highlightMeta}>{summary.label || '기록 없음'}</Text>
-                </View>
-                <Ionicons color={colors.text.tertiary} name="chevron-forward" size={18} />
-              </Pressable>
-            ))}
-          </View>
+          {summaries.length === 0 ? (
+            <Text style={styles.emptyCopy}>아직 캘린더에 표시할 인증이나 스토리 기록이 없습니다.</Text>
+          ) : (
+            <View style={styles.highlightList}>
+              {summaries.slice(0, 4).map((summary) => (
+                <Pressable
+                  key={summary.date}
+                  onPress={() => setSelectedDateState(summary.date)}
+                  style={styles.highlightRow}>
+                  <View>
+                    <Text style={styles.highlightDate}>{formatLifeDayLabel(summary.date)}</Text>
+                    <Text style={styles.highlightMeta}>{summary.label || '기록 없음'}</Text>
+                  </View>
+                  <Ionicons color={colors.text.tertiary} name="chevron-forward" size={18} />
+                </Pressable>
+              ))}
+            </View>
+          )}
         </SoftCard>
       </ScrollView>
     </View>
@@ -179,13 +199,14 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xxl,
   },
   heroCard: {
+    backgroundColor: colors.bg.warm,
+    borderColor: colors.line.warm,
     gap: spacing.sm,
   },
   heroEyebrow: {
-    color: colors.brand.primary,
+    color: colors.brand.accent,
     fontSize: 12,
     fontWeight: typography.eyebrow.fontWeight,
-    letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
   heroTitle: {
@@ -200,7 +221,19 @@ const styles = StyleSheet.create({
     lineHeight: typography.body.lineHeight,
   },
   calendarCard: {
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.soft,
     gap: spacing.md,
+  },
+  stateCard: {
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  stateCopy: {
+    color: colors.text.secondary,
+    fontSize: typography.body.fontSize,
+    lineHeight: typography.body.lineHeight,
+    textAlign: 'center',
   },
   calendarHeader: {
     gap: spacing.xs,
@@ -244,11 +277,13 @@ const styles = StyleSheet.create({
   },
   dayCellIdle: {
     backgroundColor: colors.surface.secondary,
+    borderColor: colors.line.soft,
+    borderWidth: 1,
   },
   dayCellSelected: {
-    backgroundColor: colors.brand.primarySoft,
-    borderColor: colors.brand.primary,
-    borderWidth: 1,
+    backgroundColor: colors.brand.butterSoft,
+    borderColor: colors.brand.accent,
+    borderWidth: 2,
   },
   dayLabel: {
     color: colors.text.primary,
@@ -277,23 +312,25 @@ const styles = StyleSheet.create({
     width: 8,
   },
   selectedCard: {
+    backgroundColor: colors.surface.inverse,
+    borderColor: colors.brand.accent,
+    borderWidth: 2,
     gap: spacing.sm,
   },
   selectedEyebrow: {
-    color: colors.text.tertiary,
+    color: colors.brand.butter,
     fontSize: 12,
     fontWeight: typography.eyebrow.fontWeight,
-    letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
   selectedTitle: {
-    color: colors.text.primary,
+    color: colors.text.inverse,
     fontSize: typography.title.fontSize,
     fontWeight: typography.title.fontWeight,
     lineHeight: typography.title.lineHeight,
   },
   selectedDescription: {
-    color: colors.text.secondary,
+    color: '#E8DCEA',
     fontSize: typography.body.fontSize,
     lineHeight: typography.body.lineHeight,
   },
@@ -302,19 +339,21 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   selectedMetric: {
-    backgroundColor: colors.surface.primary,
+    backgroundColor: 'rgba(255, 249, 243, 0.12)',
+    borderColor: 'rgba(255, 249, 243, 0.16)',
     borderRadius: radius.input,
+    borderWidth: 1,
     flex: 1,
     gap: spacing.xxs,
     padding: spacing.md,
   },
   metricLabel: {
-    color: colors.text.tertiary,
+    color: '#D8CADF',
     fontSize: 12,
     fontWeight: typography.label.fontWeight,
   },
   metricValue: {
-    color: colors.text.primary,
+    color: colors.text.inverse,
     fontSize: typography.title.fontSize,
     fontWeight: typography.title.fontWeight,
   },
@@ -326,6 +365,11 @@ const styles = StyleSheet.create({
     fontSize: typography.title.fontSize,
     fontWeight: typography.title.fontWeight,
     lineHeight: typography.title.lineHeight,
+  },
+  emptyCopy: {
+    color: colors.text.secondary,
+    fontSize: typography.body.fontSize,
+    lineHeight: typography.body.lineHeight,
   },
   highlightList: {
     gap: spacing.sm,

@@ -6,6 +6,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { colors } from '@/constants/tokens';
+import { PushNotificationProvider } from '@/features/notifications/push-notification-provider';
 
 import { AppSessionProvider } from './app-session-provider';
 
@@ -29,7 +30,7 @@ export function AppProviders({ children }: PropsWithChildren) {
       <SafeAreaProvider>
         <ThemeProvider value={navigationTheme}>
           <AppSessionProvider>
-            {children}
+            <PushNotificationProvider>{children}</PushNotificationProvider>
             <StatusBar style="dark" />
           </AppSessionProvider>
         </ThemeProvider>

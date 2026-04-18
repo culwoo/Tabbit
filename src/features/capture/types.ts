@@ -21,10 +21,16 @@ export type UploadProgressPhase = 'idle' | 'prepareUpload' | 'uploadMedia' | 'sa
 export type UploadJobStatus = 'idle' | 'running' | 'success' | 'failure';
 
 export type UploadErrorCode =
+  | 'AUTH_REQUIRED'
   | 'MISSING_ASSET'
   | 'NO_TAGS'
   | 'NO_TARGETS'
   | 'PERMISSION_DENIED'
+  | 'IMAGE_PROCESSING_ERROR'
+  | 'IMAGE_READ_ERROR'
+  | 'STORAGE_UPLOAD_ERROR'
+  | 'DATABASE_ERROR'
+  | 'SUPABASE_CONFIG_ERROR'
   | 'NETWORK_ERROR'
   | 'UNKNOWN';
 
@@ -35,6 +41,7 @@ export type CaptureAsset = {
   fileName: string | null;
   fileSize: number | null;
   mimeType: string | null;
+  base64?: string | null;
 };
 
 export type MediaPermissionState = {
@@ -61,12 +68,16 @@ export type UploadJobState = {
   progressPhase: UploadProgressPhase;
   retryCount: number;
   errorCode: UploadErrorCode | null;
+  errorPhase: UploadProgressPhase | null;
+  errorDetails: string | null;
 };
 
 export type CaptureTagOption = {
   id: string;
   label: string;
+  kind: 'group' | 'personal';
   connectedGroupCount: number;
+  personalTagId?: string;
 };
 
 export type CompletedUploadSummary = {

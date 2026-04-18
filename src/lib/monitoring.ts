@@ -19,13 +19,24 @@ export type AnalyticsEventName =
   | 'share_sheet_opened'
   | 'snapshot_saved';
 
-function logPrefix(channel: 'Amplitude' | 'Crashlytics') {
-  return `[${channel}:${env.appEnv}]`;
+function logPrefix(channel: 'analytics' | 'errors') {
+  return `[monitoring:${channel}:${env.appEnv}]`;
+}
+
+function shouldLogToConsole() {
+  return __DEV__ || env.appEnv !== 'production';
+}
+
+export function getMonitoringStatus() {
+  return {
+    analytics: env.amplitudeApiKey ? 'configured_pending_sdk' : 'disabled',
+    crashReporting: env.crashlyticsEnabled ? 'enabled_pending_sdk' : 'disabled',
+  } as const;
 }
 
 export function trackEvent(eventName: AnalyticsEventName, context: MonitoringContext) {
-  if (__DEV__) {
-    console.log(logPrefix('Amplitude'), eventName, context);
+  if (shouldLogToConsole()) {
+    console.log(logPrefix('analytics'), eventName, context);
   }
 }
 
@@ -35,5 +46,7 @@ export function captureHandledError(error: unknown, context: MonitoringContext) 
       ? { name: error.name, message: error.message, stack: error.stack }
       : { name: 'UnknownError', message: String(error) };
 
-  console.error(logPrefix('Crashlytics'), normalizedError, context);
+  if (shouldLogToConsole() || env.crashlyticsEnabled) {
+    console.error(logPrefix('errors'), normalizedError, context);
+  }
 }

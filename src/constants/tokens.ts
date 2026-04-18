@@ -8,44 +8,57 @@ import type { TextStyle, ViewStyle } from 'react-native';
 
 export const colors = {
   bg: {
-    canvas: '#F6F3FA',       // 연보라 틴트 배경
-    sunken: '#EDEAF4',       // 한 단계 깊은 배경
-    overlay: 'rgba(35, 28, 50, 0.32)',
+    canvas: '#F8F3F8',
+    sunken: '#EFE7F2',
+    warm: '#FFF8EF',
+    overlay: 'rgba(44, 31, 53, 0.34)',
   },
   surface: {
-    primary: '#FFFFFF',
-    secondary: '#F9F7FC',    // 카드 내부 서브 영역
-    tertiary: '#F0ECF7',     // 입력 필드, 칩 배경
-    inverse: '#2D2440',      // 다크 서피스 (버튼 등)
+    primary: '#FFFCF8',
+    secondary: '#F6EFF7',
+    tertiary: '#F0E8F4',
+    raised: '#FFFFFF',
+    pressed: '#ECE1F0',
+    inverse: '#332544',
   },
   line: {
-    soft: '#E2DCE9',         // 기본 구분선
-    strong: '#CFC7D9',       // 강조 구분선
-    accent: '#D9C5F0',       // 보라 악센트 라인
+    soft: '#E7DDEA',
+    warm: '#F0D8C7',
+    strong: '#CDBFD7',
+    accent: '#D9C2EE',
   },
   text: {
-    primary: '#241B33',      // 거의 검정, 보라 틴트
-    secondary: '#6B5F7B',    // 보조 텍스트
-    tertiary: '#9990A8',     // 비활성/힌트
-    inverse: '#FEFCFF',      // 다크 위 텍스트
+    primary: '#2E213C',
+    secondary: '#6E5D7A',
+    tertiary: '#A092AC',
+    inverse: '#FFF9F3',
   },
   brand: {
-    primary: '#9B7FD4',      // 연보라 메인
-    secondary: '#7EC4D6',    // 청록 포인트 (진행, 달성)
-    accent: '#E8A86D',       // 따뜻한 오렌지 (배지, CTA)
-    primarySoft: '#EDE5F8',  // 연보라 10% 배경
-    secondarySoft: '#E4F3F7',// 청록 10% 배경
+    primary: '#9E79D7',
+    primaryDeep: '#72509D',
+    secondary: '#72B7C5',
+    accent: '#EEA06B',
+    blush: '#F2A2B8',
+    butter: '#F6D681',
+    mint: '#8DCCAB',
+    primarySoft: '#EEE3F8',
+    secondarySoft: '#E3F3F5',
+    accentSoft: '#FFF0DD',
+    blushSoft: '#FCE8EF',
+    butterSoft: '#FFF7D8',
+    mintSoft: '#E9F7EF',
   },
   status: {
-    success: '#89BF99',      // 달성/완료
-    warning: '#D9B563',      // 주의
-    danger: '#D48E8E',       // 오류
-    info: '#7EB3CF',         // 안내
+    success: '#78B58F',
+    warning: '#D7A84E',
+    danger: '#D9828B',
+    info: '#6BA9C6',
   },
   badge: {
-    certification: '#EDE5F8',// 인증 알림 배경
-    chat: '#E4F3F7',         // 채팅 알림 배경
-    neutral: '#EAEAF0',      // 중립 배지
+    certification: '#EEE3F8',
+    chat: '#E3F3F5',
+    story: '#FFF0DD',
+    neutral: '#ECE6EF',
   },
 } as const;
 
@@ -62,67 +75,68 @@ export const spacing = {
 
 export const radius = {
   pill: 999,
-  input: 16,    // 기존 18 → 16 (4pt 배수 정렬)
+  chip: 14,
+  input: 18,
   button: 20,
-  card: 24,     // 기존 28 → 24 (좀 더 정돈)
-  sheet: 28,    // 기존 32 → 28
+  card: 26,
+  sheet: 30,
 } as const;
 
 export const typography = {
   eyebrow: {
-    fontSize: 11,   // 12 → 11 (더 섬세)
+    fontSize: 11,
     lineHeight: 14,
-    fontWeight: '700',
-    letterSpacing: 0.6,
+    fontWeight: '800',
+    letterSpacing: 0,
     textTransform: 'uppercase',
   },
   label: {
-    fontSize: 13,    // 14 → 13
+    fontSize: 13,
     lineHeight: 17,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   body: {
     fontSize: 15,
     lineHeight: 22,
-    fontWeight: '400',  // 500 → 400 (본문은 레귤러)
+    fontWeight: '400',
   },
   bodyStrong: {
     fontSize: 15,
     lineHeight: 22,
-    fontWeight: '600',  // 700 → 600 (세미볼드)
+    fontWeight: '700',
   },
   title: {
-    fontSize: 20,    // 21 → 20
+    fontSize: 20,
     lineHeight: 26,
-    fontWeight: '700',  // 800 → 700
+    fontWeight: '800',
   },
   hero: {
-    fontSize: 28,    // 32 → 28 (모바일에서 32는 과도)
-    lineHeight: 34,
-    fontWeight: '700',
+    fontSize: 30,
+    lineHeight: 36,
+    fontWeight: '900',
   },
 } as const satisfies Record<string, TextStyle>;
 
 export const shadow = {
   card: {
-    shadowColor: '#2D2440',
-    shadowOpacity: 0.06,     // 0.08 → 0.06 (더 은은)
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
+    shadowColor: '#4B3562',
+    shadowOpacity: 0.07,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
     elevation: 2,
   },
   floating: {
-    shadowColor: '#2D2440',
-    shadowOpacity: 0.10,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 6 },
+    shadowColor: '#4B3562',
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
     elevation: 4,
   },
   sheet: {
-    shadowColor: '#2D2440',
+    shadowColor: '#4B3562',
     shadowOpacity: 0.14,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: -4 },
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: -6 },
     elevation: 6,
   },
 } as const satisfies Record<string, ViewStyle>;

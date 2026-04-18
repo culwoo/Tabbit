@@ -1,3 +1,5 @@
+import { Redirect } from 'expo-router';
+
 import { AppButton } from '@/components/ui/app-button';
 import { InfoCard } from '@/components/ui/info-card';
 import { PlaceholderScreen } from '@/components/ui/placeholder-screen';
@@ -6,31 +8,38 @@ import { supabaseRedirectUrl } from '@/features/auth/lib/supabase-auth';
 import { useAppSession } from '@/providers/app-session-provider';
 
 export default function SignInScreen() {
-  const { authError, clearAuthError, isAuthenticating, isConfigured, signInWithGoogle } = useAppSession();
+  const {
+    authError,
+    bootstrapState,
+    clearAuthError,
+    isAuthenticating,
+    isConfigured,
+    signInWithGoogle,
+  } = useAppSession();
+
+  if (bootstrapState === 'signed-in') {
+    return <Redirect href="/" />;
+  }
 
   const primaryLabel = isAuthenticating ? 'Google 로그인 연결 중...' : 'Google로 시작하기';
-  const configSummary = isConfigured
-    ? `Supabase URL과 키가 준비되어 있습니다. OAuth redirect는 ${supabaseRedirectUrl} 기준으로 동작합니다.`
-    : `환경변수를 먼저 채워야 합니다: ${env.missingSupabaseEnv.join(', ')}`;
+  const configSummary = `환경변수를 먼저 채워야 합니다: ${env.missingSupabaseEnv.join(', ')}`;
 
   return (
     <PlaceholderScreen
-      description="Supabase Auth 기준 signed-out 게이트입니다. Google OAuth와 세션 복구를 이 화면에서 시작합니다."
-      eyebrow="Supabase Auth bootstrap"
+      description="친구들과 아침 루틴, 운동, 공부 인증을 같이 쌓아가요."
+      eyebrow="Welcome to Tabbit"
       primaryAction={{
         disabled: !isConfigured || isAuthenticating,
+        icon: 'logo-google',
         label: primaryLabel,
         onPress: signInWithGoogle,
       }}
-      title="Tabbit 로그인">
-      <InfoCard
-        title="현재 부트스트랩 상태"
-        description={`env=${env.appEnv}, ${configSummary}`}
-      />
-      <InfoCard
-        title="지금 필요한 설정"
-        description="Supabase Auth에서 Google provider를 켜고 redirect URL에 `tabbit://**`를 추가해야 실제 로그인 왕복이 끝납니다."
-      />
+      title="오늘도 같이 한 칸 채워볼까요?">
+      <InfoCard title="그룹 인증" description="친구들이 같은 태그로 인증하면 오늘의 스토리 카드가 열립니다." />
+      <InfoCard title="개인공간" description="그룹에 올리지 않는 기록도 태그별로 조용히 모아둘 수 있어요." />
+      {!isConfigured ? (
+        <InfoCard title="개발 설정 필요" description={`${configSummary} OAuth redirect: ${supabaseRedirectUrl}`} />
+      ) : null}
       {authError ? (
         <InfoCard title="최근 인증 오류" description={authError}>
           <AppButton label="오류 메시지 닫기" onPress={clearAuthError} variant="secondary" />

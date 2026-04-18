@@ -18,13 +18,14 @@ import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { AppButton } from '@/components/ui/app-button';
 import { colors, radius, shadow, spacing, typography } from '@/constants/tokens';
 
-import type { GroupReadModel, GroupTagReadModel } from '../model/story-share';
+import type { GroupRow } from '@/lib/supabase';
+import type { GroupTagEntry } from '../hooks/use-group-detail';
 import { StoryShareCard } from './story-share-card';
 
 type StoryShareModalProps = {
   visible: boolean;
-  group: GroupReadModel;
-  tagEntry: GroupTagReadModel;
+  group: GroupRow;
+  tagEntry: GroupTagEntry;
   isExporting: boolean;
   errorMessage?: string | null;
   captureRef: RefObject<ViewShot | null>;
@@ -144,7 +145,7 @@ const styles = StyleSheet.create({
     color: colors.text.inverse,
     fontSize: 12,
     fontWeight: typography.eyebrow.fontWeight,
-    letterSpacing: 0.8,
+    letterSpacing: 0,
     textTransform: 'uppercase',
   },
   headerTitle: {

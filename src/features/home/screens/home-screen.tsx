@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   RefreshControl,
@@ -14,7 +14,7 @@ import {
 import { AppHeader, type HeaderAction } from '@/components/shell/app-header';
 import { SoftCard } from '@/components/ui/soft-card';
 import { TagPill } from '@/components/ui/tag-pill';
-import { colors, spacing, typography, shadow, radius } from '@/constants/tokens';
+import { colors, radius, spacing, typography } from '@/constants/tokens';
 import { resolveLifestyleDate } from '@/lib/domain';
 import {
   fetchMyGroups,
@@ -113,6 +113,18 @@ export default function HomeScreen() {
     setRefreshing(false);
   }, [loadData]);
 
+  const homeStats = useMemo(() => {
+    const totalTags = groupCards.reduce((sum, card) => sum + card.progress.total, 0);
+    const certifiedTags = groupCards.reduce((sum, card) => sum + card.progress.certified, 0);
+
+    return {
+      certifiedTags,
+      totalGroups: groupCards.length,
+      totalTags,
+      completionPercent: totalTags > 0 ? Math.round((certifiedTags / totalTags) * 100) : 0,
+    };
+  }, [groupCards]);
+
   return (
     <View style={styles.screen}>
       <AppHeader rightActions={rightActions} variant="home" />
@@ -128,7 +140,39 @@ export default function HomeScreen() {
           />
         }
       >
-        {/* 개인공간 카드 */}
+        <View style={styles.todayPanel}>
+          <View style={styles.todayTopRow}>
+            <View style={styles.todayCopy}>
+              <Text style={styles.todayEyebrow}>Today together</Text>
+              <Text style={styles.todayTitle}>오늘도 같이 한 칸 채워요</Text>
+              <Text style={styles.todayDescription}>
+                그룹 인증과 나만의 기록을 한곳에서 가볍게 이어갑니다.
+              </Text>
+            </View>
+            <View style={styles.todayStamp}>
+              <Text style={styles.todayStampValue}>{homeStats.completionPercent}%</Text>
+              <Text style={styles.todayStampLabel}>진행</Text>
+            </View>
+          </View>
+          <View style={styles.todayTrack}>
+            <View style={[styles.todayTrackFill, { width: `${homeStats.completionPercent}%` }]} />
+          </View>
+          <View style={styles.todayMetricRow}>
+            <View style={styles.todayMetric}>
+              <Text style={styles.todayMetricValue}>{homeStats.totalGroups}</Text>
+              <Text style={styles.todayMetricLabel}>그룹</Text>
+            </View>
+            <View style={styles.todayMetric}>
+              <Text style={styles.todayMetricValue}>{homeStats.certifiedTags}</Text>
+              <Text style={styles.todayMetricLabel}>완료 태그</Text>
+            </View>
+            <View style={styles.todayMetric}>
+              <Text style={styles.todayMetricValue}>{homeStats.totalTags}</Text>
+              <Text style={styles.todayMetricLabel}>오늘 태그</Text>
+            </View>
+          </View>
+        </View>
+
         <TouchableOpacity
           accessibilityLabel="개인공간 열기"
           accessibilityRole="button"
@@ -138,12 +182,22 @@ export default function HomeScreen() {
           <SoftCard style={styles.personalCard} variant="personal-space">
             <View style={styles.cardTopRow}>
               <View style={styles.cardTitleRow}>
-                <Ionicons color={colors.brand.accent} name="bookmark" size={18} />
+                <View style={styles.personalIcon}>
+                  <Ionicons color={colors.brand.accent} name="bookmark" size={16} />
+                </View>
                 <Text style={styles.cardTitle}>개인공간</Text>
               </View>
               <Ionicons color={colors.text.tertiary} name="chevron-forward" size={18} />
             </View>
-            <Text style={styles.cardSubtext}>나만의 기록과 회고</Text>
+            <Text style={styles.cardSubtext}>그룹에 올리지 않아도 남겨두는 내 기록</Text>
+            <View style={styles.personalHintRow}>
+              <View style={styles.hintPill}>
+                <Text style={styles.hintPillText}>나만 보기</Text>
+              </View>
+              <View style={[styles.hintPill, styles.hintPillWarm]}>
+                <Text style={styles.hintPillText}>태그별 회고</Text>
+              </View>
+            </View>
           </SoftCard>
         </TouchableOpacity>
 
@@ -157,11 +211,13 @@ export default function HomeScreen() {
 
         {/* 빈 상태 */}
         {!loading && groupCards.length === 0 ? (
-          <SoftCard style={styles.emptyCard} variant="empty">
-            <Ionicons color={colors.text.tertiary} name="people-outline" size={48} />
+            <SoftCard style={styles.emptyCard} variant="empty">
+            <View style={styles.emptyIcon}>
+              <Ionicons color={colors.brand.primary} name="people-outline" size={34} />
+            </View>
             <Text style={styles.emptyTitle}>아직 참여 중인 그룹이 없어요</Text>
             <Text style={styles.emptyDesc}>
-              오른쪽 상단 + 버튼으로{'\n'}그룹을 만들거나 초대 코드로 참여해보세요
+              같이 인증할 친구들을 초대하면 오늘의 진행이 여기서 바로 보입니다.
             </Text>
             <TouchableOpacity
               accessibilityLabel="그룹 만들기"
@@ -176,21 +232,36 @@ export default function HomeScreen() {
         ) : null}
 
         {/* 그룹 카드 */}
-        {groupCards.map(({ group, tags, progress }) => (
+        {groupCards.map(({ group, tags, progress }, groupIndex) => (
           <TouchableOpacity
             accessibilityLabel={`${group.name} 그룹 열기`}
             accessibilityRole="button"
             activeOpacity={0.7}
-            key={group.id}
+            key={`${group.id}-${groupIndex}`}
             onPress={() => router.push(`/groups/${group.id}`)}
           >
             <SoftCard style={styles.groupCard} variant="group-space">
               <View style={styles.cardTopRow}>
                 <View style={styles.cardTitleRow}>
-                  <Ionicons color={colors.brand.primary} name="people" size={18} />
-                  <Text style={styles.cardTitle}>{group.name}</Text>
+                  <View style={styles.groupIcon}>
+                    <Ionicons color={colors.brand.primaryDeep} name="people" size={16} />
+                  </View>
+                  <View>
+                    <Text style={styles.cardTitle}>{group.name}</Text>
+                    <Text style={styles.groupSubtitle}>
+                      {progress.total > 0 ? `${progress.total}개 태그 진행 중` : '첫 태그를 기다리는 중'}
+                    </Text>
+                  </View>
                 </View>
-                <Ionicons color={colors.text.tertiary} name="chevron-forward" size={18} />
+                <View style={styles.ruleBadge}>
+                  <Text style={styles.ruleBadgeText}>
+                    {group.threshold_rule === 'ALL'
+                      ? '전원'
+                      : group.threshold_rule === 'N_MINUS_1'
+                        ? 'N-1'
+                        : 'N-2'}
+                  </Text>
+                </View>
               </View>
 
               {/* 진행도 바 */}
@@ -212,7 +283,7 @@ export default function HomeScreen() {
                   </View>
                   <Text style={styles.progressText}>
                     {progress.certified === progress.total
-                      ? '🎉 오늘 전체 태그 달성!'
+                      ? '오늘 전체 태그 달성'
                       : `${progress.certified}/${progress.total} 태그 달성`}
                   </Text>
                 </View>
@@ -232,14 +303,10 @@ export default function HomeScreen() {
                 <Text style={styles.noTagText}>아직 태그가 없습니다</Text>
               )}
 
-              {/* 하단 메타 */}
-              <Text style={styles.cardMeta}>
-                {group.threshold_rule === 'ALL'
-                  ? '전원 인증'
-                  : group.threshold_rule === 'N_MINUS_1'
-                    ? 'N-1명 인증'
-                    : 'N-2명 인증'}
-              </Text>
+              <View style={styles.cardFooter}>
+                <Text style={styles.cardMeta}>오전 5시 기준으로 하루가 정리돼요</Text>
+                <Ionicons color={colors.text.tertiary} name="chevron-forward" size={17} />
+              </View>
             </SoftCard>
           </TouchableOpacity>
         ))}
@@ -260,13 +327,112 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
-    gap: spacing.sm,
+    gap: spacing.md,
     padding: spacing.lg,
+  },
+
+  // 오늘 패널
+  todayPanel: {
+    backgroundColor: colors.surface.inverse,
+    borderColor: colors.brand.accent,
+    borderRadius: radius.sheet,
+    borderWidth: 2,
+    gap: spacing.md,
+    overflow: 'hidden',
+    padding: spacing.lg,
+  },
+  todayTopRow: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: spacing.md,
+    justifyContent: 'space-between',
+  },
+  todayCopy: {
+    flex: 1,
+    gap: spacing.xs,
+  },
+  todayEyebrow: {
+    color: colors.brand.butter,
+    fontSize: typography.eyebrow.fontSize,
+    fontWeight: typography.eyebrow.fontWeight,
+    letterSpacing: 0,
+    lineHeight: typography.eyebrow.lineHeight,
+    textTransform: 'uppercase',
+  },
+  todayTitle: {
+    color: colors.text.inverse,
+    fontSize: 27,
+    fontWeight: '900',
+    lineHeight: 33,
+  },
+  todayDescription: {
+    color: '#E8DCEA',
+    fontSize: typography.body.fontSize,
+    lineHeight: typography.body.lineHeight,
+  },
+  todayStamp: {
+    alignItems: 'center',
+    backgroundColor: colors.brand.butterSoft,
+    borderColor: colors.brand.accent,
+    borderRadius: 18,
+    borderWidth: 1,
+    minWidth: 72,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    transform: [{ rotate: '3deg' }],
+  },
+  todayStampValue: {
+    color: colors.text.primary,
+    fontSize: 22,
+    fontVariant: ['tabular-nums'],
+    fontWeight: '900',
+    lineHeight: 27,
+  },
+  todayStampLabel: {
+    color: colors.text.secondary,
+    fontSize: 12,
+    fontWeight: typography.label.fontWeight,
+  },
+  todayTrack: {
+    backgroundColor: 'rgba(255, 249, 243, 0.16)',
+    borderRadius: radius.pill,
+    height: 10,
+    overflow: 'hidden',
+  },
+  todayTrackFill: {
+    backgroundColor: colors.brand.butter,
+    borderRadius: radius.pill,
+    height: '100%',
+  },
+  todayMetricRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+  },
+  todayMetric: {
+    backgroundColor: 'rgba(255, 249, 243, 0.12)',
+    borderColor: 'rgba(255, 249, 243, 0.14)',
+    borderRadius: radius.input,
+    borderWidth: 1,
+    flex: 1,
+    gap: spacing.xxs,
+    padding: spacing.sm,
+  },
+  todayMetricValue: {
+    color: colors.text.inverse,
+    fontSize: 20,
+    fontVariant: ['tabular-nums'],
+    fontWeight: '900',
+    lineHeight: 24,
+  },
+  todayMetricLabel: {
+    color: '#D8CADF',
+    fontSize: 12,
+    fontWeight: typography.label.fontWeight,
   },
 
   // 개인공간
   personalCard: {
-    gap: spacing.xs,
+    gap: spacing.sm,
   },
   cardTopRow: {
     alignItems: 'center',
@@ -277,16 +443,48 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: spacing.xs,
+    flex: 1,
   },
   cardTitle: {
     color: colors.text.primary,
     fontSize: typography.title.fontSize,
     fontWeight: typography.title.fontWeight,
+    lineHeight: typography.title.lineHeight,
   },
   cardSubtext: {
     color: colors.text.secondary,
     fontSize: typography.body.fontSize,
     fontWeight: typography.body.fontWeight,
+    lineHeight: typography.body.lineHeight,
+  },
+  personalIcon: {
+    alignItems: 'center',
+    backgroundColor: colors.brand.accentSoft,
+    borderRadius: radius.pill,
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
+  personalHintRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  hintPill: {
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.warm,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  hintPillWarm: {
+    backgroundColor: colors.brand.butterSoft,
+  },
+  hintPillText: {
+    color: colors.text.secondary,
+    fontSize: 12,
+    fontWeight: typography.label.fontWeight,
   },
 
   // 로딩
@@ -303,8 +501,16 @@ const styles = StyleSheet.create({
   // 빈 상태
   emptyCard: {
     alignItems: 'center',
-    gap: spacing.md,
+    gap: spacing.sm,
     paddingVertical: spacing.xxl,
+  },
+  emptyIcon: {
+    alignItems: 'center',
+    backgroundColor: colors.brand.primarySoft,
+    borderRadius: radius.card,
+    height: 72,
+    justifyContent: 'center',
+    width: 72,
   },
   emptyTitle: {
     color: colors.text.primary,
@@ -332,19 +538,49 @@ const styles = StyleSheet.create({
 
   // 그룹 카드
   groupCard: {
-    gap: spacing.sm,
+    gap: spacing.md,
+  },
+  groupIcon: {
+    alignItems: 'center',
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.accent,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  groupSubtitle: {
+    color: colors.text.secondary,
+    fontSize: 12,
+    fontWeight: typography.label.fontWeight,
+    lineHeight: 16,
+  },
+  ruleBadge: {
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.accent,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  ruleBadgeText: {
+    color: colors.brand.primaryDeep,
+    fontSize: 12,
+    fontWeight: '900',
+    lineHeight: 16,
   },
   progressSection: {
     gap: spacing.xs,
   },
   progressBarBg: {
-    backgroundColor: colors.bg.sunken,
-    borderRadius: 6,
-    height: 8,
+    backgroundColor: colors.surface.raised,
+    borderRadius: radius.pill,
+    height: 10,
     overflow: 'hidden',
   },
   progressBarFill: {
-    borderRadius: 6,
+    borderRadius: radius.pill,
     height: '100%',
   },
   progressText: {
@@ -361,6 +597,11 @@ const styles = StyleSheet.create({
     color: colors.text.tertiary,
     fontSize: typography.body.fontSize,
     fontStyle: 'italic',
+  },
+  cardFooter: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
   },
   cardMeta: {
     color: colors.text.tertiary,

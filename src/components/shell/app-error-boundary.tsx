@@ -110,7 +110,7 @@ const styles = StyleSheet.create({
     color: colors.text.tertiary,
     fontSize: 11,
     fontWeight: '800',
-    letterSpacing: 0.5,
+    letterSpacing: 0,
     textTransform: 'uppercase',
   },
   debugText: {

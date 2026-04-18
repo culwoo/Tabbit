@@ -1,61 +1,99 @@
 # Release Readiness
 
-Last updated: 2026-04-16
+Last updated: 2026-04-18
 
 ## Implemented in code
 
-- Share flow now uses `Group Detail > Tag Screen > Share Mode` instead of a separate server-rendered card.
-- Share CTA is always visible on the group tag screen and stays disabled until the threshold is unlocked.
+- Share flow uses `Group Detail > Tag Screen > Share Mode`.
+- Share CTA is visible on the group tag screen and stays disabled until the threshold is unlocked.
 - Share Mode exports a fixed-ratio 9:16 image on-device using `react-native-view-shot`.
 - Save flow writes the exported image to the device media library.
 - Share flow saves first, then opens the OS share sheet.
+- Snapshot export/share metadata is persisted to `story_cards` through the `save_story_card_snapshot` RPC.
 - Calendar and date detail screens distinguish `threshold unlocked` from `snapshot saved`.
 - Archived entries can reopen Share Mode through the original group route with `groupId + tagId + lifeDay`.
+- Push notifications are wired for Android through Expo Push, Supabase delivery queue, and the deployed `send-push-notifications` Edge Function.
+
+## Release config
+
+- Public app version: `1.0.0`.
+- Android `versionCode`: `1`.
+- iOS `buildNumber`: `1`.
+- EAS `appVersionSource`: `local`.
+- EAS preview profile builds an internal Android APK.
+- EAS production profile builds an Android App Bundle.
+- `runtimeVersion.policy` is `appVersion`.
+- `userInterfaceStyle` is locked to `light` until the explicit dark-mode task is done.
+- iOS tablet support is disabled until tablet QA and iPad screenshots are ready.
+
+## Assets
+
+Generated launcher/splash assets:
+
+- `assets/images/icon.png`
+- `assets/images/android-icon-background.png`
+- `assets/images/android-icon-foreground.png`
+- `assets/images/android-icon-monochrome.png`
+- `assets/images/splash-icon.png`
+- `assets/images/favicon.png`
+- Native Android launcher/splash resources under `android/app/src/main/res`
+
+Generated store asset:
+
+- `assets/store/play-feature-graphic.png`
+
+Regenerate them with:
+
+```bash
+npm run release:assets
+```
+
+See `docs/store-assets.md` for listing copy, screenshot capture list, store requirements, and external tasks.
 
 ## Data and telemetry scaffolding
 
-- `ThresholdState` now carries `groupId`, `tagId`, `lifeDay`, `achievedCount`, `threshold`, `status`, `unlockedAt`, `archivedAt`.
-- `StoryShareSnapshot` now represents the exported artifact metadata instead of a prebuilt story card.
-- Group read models expose `shareEnabled`, `shareProgressLabel`, `shareCtaStyle`, `shareArchiveAvailable`.
-- Analytics event names are fixed in `src/lib/monitoring.ts`:
-  - `threshold_unlocked`
-  - `share_mode_opened`
-  - `share_export_started`
-  - `share_export_succeeded`
-  - `share_export_failed`
-  - `share_sheet_opened`
-  - `snapshot_saved`
-- Monitoring wrappers currently log to console in development. Real Amplitude and Crashlytics project wiring is still required before release.
+- Analytics event names are fixed in `src/lib/monitoring.ts`.
+- Monitoring wrappers currently provide a contract and development logging only.
+- Real Amplitude and Crashlytics/Sentry SDKs are intentionally not wired in this pass because provider accounts, production keys, privacy disclosures, and iOS artifacts are not finalized.
+- EAS preview/production profiles keep `EXPO_PUBLIC_ENABLE_CRASHLYTICS=false`.
 
-## Environment
+See `docs/observability-plan.md` for the provider decision, event contract, and setup checklist.
 
-- `EXPO_PUBLIC_APP_ENV`
-- `EXPO_PUBLIC_AMPLITUDE_API_KEY`
-- `EXPO_PUBLIC_ENABLE_CRASHLYTICS`
+## Validation checklist
 
-## Android release checklist
+Run before a preview build:
 
-- Confirm `app.json` identifiers stay on `Tabbit` / `com.tabbit.app`.
-- Replace placeholder icons, splash, screenshots, and Play Store copy with final assets.
-- Connect real Amplitude and Crashlytics projects and verify live data from a preview build.
-- Verify media-library permissions on Android 13+ for save and re-share flow.
-- Run a closed testing build and cover:
-  - locked CTA render
-  - unlock to Share Mode transition
-  - save only
-  - save + share sheet
-  - export failure retry
-  - archived replay from calendar/date detail
+```bash
+npm run release:check
+npx expo export --platform android --clear
+cd android && gradlew.bat assembleDebug --console plain --stacktrace
+```
 
-## iOS smoke checklist
+Run a preview build when logged in to Expo/EAS:
 
-- Verify login, upload, group tag screen, Share Mode safe area, and share sheet behavior.
-- Confirm `bundleIdentifier` stays aligned with `com.tabbit.app`.
-- Recheck photo-library permission copy before TestFlight or App Store submission.
+```bash
+npm run build:preview:android
+```
 
-## Remaining work before store submission
+Closed testing QA should cover:
 
-- Replace the in-memory story share store with real backend-backed threshold/archive data.
-- Persist saved snapshot metadata outside the app session.
-- Wire real Amplitude and Crashlytics SDK initialization.
-- Prepare privacy policy, store listing copy, and final marketing screenshots.
+- Google login and OAuth return
+- camera capture and image upload
+- personal-space-only upload
+- group tag upload
+- threshold unlock and story-card visibility
+- save only
+- save plus system share sheet
+- export failure retry
+- push notification receipt in foreground and background
+- notification tap routing for group/chat/story payloads
+- calendar/date detail replay of saved story cards
+
+## External tasks
+
+- Host the privacy policy draft from `docs/privacy-policy-draft.md` as a public web page after review.
+- Create Google Play Console app listing and upload store assets.
+- Decide store developer name, support email, and privacy policy URL.
+- Capture final phone screenshots from a preview build.
+- Create Amplitude and crash reporting projects only if the first launch will include real SDK telemetry.
+- If iOS is included, create App Store Connect/Firebase iOS app records and add iOS QA/screenshots.

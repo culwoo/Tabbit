@@ -16,13 +16,13 @@ type MenuItem = {
 
 export default function MyScreen() {
   const navigation = useNavigation();
-  const { isAuthenticating, signOut, user, userId } = useAppSession();
+  const { isAuthenticating, signOut, user } = useAppSession();
 
   function handleBack() {
     if (navigation.canGoBack()) {
       router.back();
     } else {
-      router.replace('/(tabs)/index');
+      router.replace('/');
     }
   }
 
@@ -163,19 +163,26 @@ const styles = StyleSheet.create({
   // 프로필 헤더
   profileSection: {
     alignItems: 'center',
+    backgroundColor: colors.bg.warm,
+    borderColor: colors.line.warm,
+    borderRadius: radius.sheet,
+    borderWidth: 1,
     gap: spacing.md,
-    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xl,
   },
   avatarLarge: {
     alignItems: 'center',
-    backgroundColor: colors.brand.primarySoft,
+    backgroundColor: colors.surface.inverse,
+    borderColor: colors.brand.accent,
+    borderWidth: 2,
     borderRadius: 36,
     height: 72,
     justifyContent: 'center',
     width: 72,
   },
   avatarLargeText: {
-    color: colors.brand.primary,
+    color: colors.text.inverse,
     fontSize: 28,
     fontWeight: '700',
   },
@@ -196,8 +203,10 @@ const styles = StyleSheet.create({
   // 통계
   statsRow: {
     alignItems: 'center',
-    backgroundColor: colors.surface.primary,
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.soft,
     borderRadius: radius.card,
+    borderWidth: 1,
     flexDirection: 'row',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.lg,
@@ -225,8 +234,10 @@ const styles = StyleSheet.create({
 
   // 메뉴
   menuSection: {
-    backgroundColor: colors.surface.primary,
+    backgroundColor: colors.surface.raised,
+    borderColor: colors.line.soft,
     borderRadius: radius.card,
+    borderWidth: 1,
     overflow: 'hidden',
   },
   menuRow: {
