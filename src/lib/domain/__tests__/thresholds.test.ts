@@ -21,8 +21,8 @@ describe('resolveEffectiveThreshold', () => {
       expect(resolveEffectiveThreshold('N_MINUS_1', 4)).toBe(3);
     });
 
-    test('2명이면 최소 1명', () => {
-      expect(resolveEffectiveThreshold('N_MINUS_1', 2)).toBe(1);
+    test('2명이면 전원 필요', () => {
+      expect(resolveEffectiveThreshold('N_MINUS_1', 2)).toBe(2);
     });
 
     test('1명이면 최소 1명 (0 미만으로 내려가지 않음)', () => {
@@ -39,8 +39,8 @@ describe('resolveEffectiveThreshold', () => {
       expect(resolveEffectiveThreshold('N_MINUS_2', 3)).toBe(1);
     });
 
-    test('2명이면 최소 1명', () => {
-      expect(resolveEffectiveThreshold('N_MINUS_2', 2)).toBe(1);
+    test('2명이면 전원 필요', () => {
+      expect(resolveEffectiveThreshold('N_MINUS_2', 2)).toBe(2);
     });
   });
 
@@ -58,8 +58,8 @@ describe('resolveEffectiveThreshold', () => {
 });
 
 describe('formatThresholdSummary', () => {
-  test('ALL이고 전원이면 "전원 인증"', () => {
-    expect(formatThresholdSummary('ALL', 4)).toBe('전원 인증');
+  test('ALL이고 전원이면 "모두 인증"', () => {
+    expect(formatThresholdSummary('ALL', 4)).toBe('모두 인증');
   });
 
   test('N-1이면 "3/4명 인증"', () => {

@@ -44,23 +44,24 @@ function RootNavigator() {
       <Stack screenOptions={stackScreenOptions}>
         <Stack.Screen name="index" />
         <Stack.Screen name="(auth)" />
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="personal/index" />
-          <Stack.Screen name="groups/[groupId]" />
-          <Stack.Screen name="groups/chat/[groupId]" />
-          <Stack.Screen name="capture/index" />
-          <Stack.Screen name="capture/share" />
-          <Stack.Screen name="calendar/[date]" />
-          <Stack.Screen name="notifications" />
-          <Stack.Screen name="profile" />
-          <Stack.Screen
-            name="group-actions"
-            options={{
-              animation: 'fade',
-              contentStyle: { backgroundColor: 'transparent' },
-              presentation: 'transparentModal',
-            }}
-          />
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="personal/index" />
+        <Stack.Screen name="groups/[groupId]" />
+        <Stack.Screen name="groups/settings/[groupId]" />
+        <Stack.Screen name="groups/chat/[groupId]" />
+        <Stack.Screen name="capture/index" />
+        <Stack.Screen name="capture/share" />
+        <Stack.Screen name="calendar/[date]" />
+        <Stack.Screen name="notifications" />
+        <Stack.Screen name="profile" />
+        <Stack.Screen
+          name="group-actions"
+          options={{
+            animation: 'fade',
+            contentStyle: { backgroundColor: 'transparent' },
+            presentation: 'transparentModal',
+          }}
+        />
       </Stack>
     </CaptureSessionProvider>
   );

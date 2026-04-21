@@ -37,8 +37,9 @@ export function subscribeToChatMessages(
   groupId: string,
   onNewMessage: (message: ChatMessageRow) => void,
 ) {
+  const channelName = `chat:${groupId}-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
   const channel = db()
-    .channel(`chat:${groupId}`)
+    .channel(channelName)
     .on(
       'postgres_changes',
       {
@@ -54,7 +55,7 @@ export function subscribeToChatMessages(
     .subscribe();
 
   return () => {
-    channel.unsubscribe();
+    db().removeChannel(channel);
   };
 }
 

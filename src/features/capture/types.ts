@@ -58,6 +58,7 @@ export type CaptureDraft = {
   sourceType: MediaSource | null;
   caption: string;
   selectedTagIds: string[];
+  disabledGroupIds: string[];
   resolvedTargets: ResolvedShareTarget[];
   dirty: boolean;
   lastError: string | null;

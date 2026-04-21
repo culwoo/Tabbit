@@ -7,22 +7,30 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { AppHeader } from '@/components/shell/app-header';
-import { colors, radius, spacing, typography } from '@/constants/tokens';
-import { useAppSession } from '@/providers/app-session-provider';
+import {
+  PaperAvatar,
+  Tape,
+  paperColors,
+  paperFonts,
+  paperShadow,
+  toneFromIndex,
+} from '@/components/ui/paper-design';
 import {
   fetchChatMessages,
   sendChatMessage,
   subscribeToChatMessages,
   type ChatMessageRow,
 } from '@/lib/supabase';
+import { useAppSession } from '@/providers/app-session-provider';
+import { useFontPreference } from '@/providers/font-preference-provider';
 
 type UserJoinResult = { id: string; display_name: string; avatar_url: string | null };
 
@@ -35,29 +43,21 @@ function formatTime(iso: string) {
   return d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-function AvatarCircle({ name }: { name: string }) {
-  const initial = name.charAt(0);
-  return (
-    <View style={styles.avatar}>
-      <Text style={styles.avatarText}>{initial}</Text>
-    </View>
-  );
-}
-
 export default function GroupChatScreen() {
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const { groupId } = useLocalSearchParams<{ groupId: string }>();
   const { userId } = useAppSession();
+  const { bodyTextStyle, strongTextStyle } = useFontPreference();
 
   const [messages, setMessages] = useState<ChatBubble[]>([]);
   const [loading, setLoading] = useState(true);
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
-  const flatListRef = useRef<FlatList>(null);
+  const flatListRef = useRef<FlatList<ChatBubble> | null>(null);
 
   const normalizedGroupId = Array.isArray(groupId) ? groupId[0] : groupId ?? '';
 
-  // 메시지 로드
   useEffect(() => {
     if (!normalizedGroupId) return;
 
@@ -65,27 +65,25 @@ export default function GroupChatScreen() {
       try {
         const data = await fetchChatMessages(normalizedGroupId, 80);
         setMessages(data as unknown as ChatBubble[]);
-      } catch (err) {
-        console.error('[GroupChat] fetch error:', err);
+      } catch (error) {
+        console.error('[GroupChat] fetch error:', error);
       } finally {
         setLoading(false);
       }
     })();
   }, [normalizedGroupId]);
 
-  // Realtime 구독
   useEffect(() => {
-    if (!normalizedGroupId) return;
+    if (!normalizedGroupId) return undefined;
 
-    const unsubscribe = subscribeToChatMessages(normalizedGroupId, (newMsg) => {
-      setMessages((prev) => [...prev, newMsg as ChatBubble]);
+    const unsubscribe = subscribeToChatMessages(normalizedGroupId, (newMessage) => {
+      setMessages((items) => [...items, newMessage as ChatBubble]);
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     });
 
     return unsubscribe;
   }, [normalizedGroupId]);
 
-  // 전송
   const handleSend = useCallback(async () => {
     if (!inputText.trim() || !userId || !normalizedGroupId || sending) return;
 
@@ -96,65 +94,79 @@ export default function GroupChatScreen() {
 
     try {
       await sendChatMessage(normalizedGroupId, userId, text);
-      // Realtime이 새 메시지를 자동 반영함
-    } catch (err) {
-      console.error('[GroupChat] send error:', err);
-      setInputText(text); // 실패시 복원
+    } catch (error) {
+      console.error('[GroupChat] send error:', error);
+      setInputText(text);
     } finally {
       setSending(false);
     }
-  }, [inputText, userId, normalizedGroupId, sending]);
+  }, [inputText, normalizedGroupId, sending, userId]);
 
   function handleBack() {
     if (navigation.canGoBack()) {
       router.back();
-    } else {
-      router.replace('/');
+      return;
     }
+
+    router.replace('/');
   }
 
   const renderMessage = useCallback(
-    ({ item }: { item: ChatBubble }) => {
+    ({ item, index }: { item: ChatBubble; index: number }) => {
       const isMine = item.author_id === userId;
       const userRecord = Array.isArray(item.users) ? item.users[0] : item.users;
       const displayName = userRecord?.display_name ?? '멤버';
 
       return (
-        <View style={[styles.messageRow, isMine && styles.messageRowMine]}>
-          {!isMine ? <AvatarCircle name={displayName} /> : null}
-          <View style={styles.messageContent}>
-            {!isMine ? <Text style={styles.senderName}>{displayName}</Text> : null}
-            <View style={[styles.bubble, isMine ? styles.bubbleMine : styles.bubbleOther]}>
-              <Text style={[styles.bubbleText, isMine && styles.bubbleTextMine]}>{item.body}</Text>
+        <View style={[styles.messageRow, isMine ? styles.messageRowMine : undefined]}>
+          {!isMine ? <PaperAvatar label={displayName} size={34} tone={toneFromIndex(index)} /> : null}
+          <View style={[styles.messageContent, isMine ? styles.messageContentMine : undefined]}>
+            {!isMine ? <Text style={[styles.senderName, bodyTextStyle]}>{displayName}</Text> : null}
+            <View
+              style={[
+                styles.bubble,
+                isMine ? styles.bubbleMine : styles.bubbleOther,
+                { transform: [{ rotate: `${isMine ? 0.3 : -0.3}deg` }] },
+              ]}>
+              <Text style={[styles.bubbleText, bodyTextStyle, isMine ? styles.bubbleTextMine : undefined]}>
+                {item.body}
+              </Text>
             </View>
-            <Text style={[styles.timestamp, isMine && styles.timestampMine]}>
+            <Text style={[styles.timestamp, bodyTextStyle, isMine ? styles.timestampMine : undefined]}>
               {formatTime(item.created_at)}
             </Text>
           </View>
         </View>
       );
     },
-    [userId],
+    [bodyTextStyle, userId],
   );
 
   return (
     <View style={styles.screen}>
-      <AppHeader onBack={handleBack} title="그룹 채팅" variant="detail" />
+      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+        <Pressable accessibilityLabel="뒤로가기" onPress={handleBack} style={styles.iconButton}>
+          <Ionicons color={paperColors.ink0} name="chevron-back" size={24} />
+        </Pressable>
+        <Text style={styles.topTitle}>그룹 채팅</Text>
+        <View style={styles.iconButton} />
+      </View>
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}
-        style={styles.flex}
-      >
+        style={styles.flex}>
         {loading ? (
           <View style={styles.loadingBox}>
-            <ActivityIndicator color={colors.brand.primary} size="large" />
+            <ActivityIndicator color={paperColors.coral} size="large" />
+            <Text style={[styles.loadingText, bodyTextStyle]}>메모를 불러오는 중</Text>
           </View>
         ) : messages.length === 0 ? (
           <View style={styles.emptyBox}>
-            <Ionicons color={colors.text.tertiary} name="chatbubbles-outline" size={48} />
-            <Text style={styles.emptyTitle}>아직 남긴 말이 없어요</Text>
-            <Text style={styles.emptyDesc}>오늘 인증을 기다리는 친구들에게 짧게 말을 걸어보세요.</Text>
+            <Tape angle={-6} left={40} top={-10} width={76} />
+            <Ionicons color={paperColors.ink2} name="chatbubbles-outline" size={42} />
+            <Text style={[styles.emptyTitle, strongTextStyle]}>아직 남긴 말이 없어요</Text>
+            <Text style={[styles.emptyDesc, bodyTextStyle]}>오늘 인증을 기다리는 친구들에게 짧게 말을 걸어보세요.</Text>
           </View>
         ) : (
           <FlatList
@@ -168,33 +180,27 @@ export default function GroupChatScreen() {
           />
         )}
 
-        {/* 입력 바 */}
-        <View style={styles.inputBar}>
+        <View style={[styles.inputBar, { paddingBottom: insets.bottom + 10 }]}>
           <TextInput
             maxLength={500}
             multiline
             onChangeText={setInputText}
             placeholder="짧은 응원을 남겨보세요"
-            placeholderTextColor={colors.text.tertiary}
-            style={styles.textInput}
+            placeholderTextColor={paperColors.ink3}
+            style={[styles.textInput, bodyTextStyle]}
             value={inputText}
           />
-          <TouchableOpacity
+          <Pressable
             accessibilityLabel="전송"
-            activeOpacity={0.7}
             disabled={!inputText.trim() || sending}
-            onPress={handleSend}
-            style={[
-              styles.sendButton,
-              (!inputText.trim() || sending) && styles.sendButtonDisabled,
-            ]}
-          >
+            onPress={() => void handleSend()}
+            style={[styles.sendButton, (!inputText.trim() || sending) && styles.sendButtonDisabled]}>
             {sending ? (
-              <ActivityIndicator color={colors.text.inverse} size={16} />
+              <ActivityIndicator color={paperColors.card} size={16} />
             ) : (
-              <Ionicons color={colors.text.inverse} name="arrow-up" size={18} />
+              <Ionicons color={paperColors.card} name="arrow-up" size={18} />
             )}
-          </TouchableOpacity>
+          </Pressable>
         </View>
       </KeyboardAvoidingView>
     </View>
@@ -202,110 +208,159 @@ export default function GroupChatScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    backgroundColor: colors.bg.canvas,
-    flex: 1,
+  bubble: {
+    borderColor: paperColors.ink0,
+    borderRadius: 14,
+    borderWidth: 1.3,
+    maxWidth: '100%',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  bubbleMine: {
+    backgroundColor: paperColors.ink0,
+    borderBottomRightRadius: 4,
+  },
+  bubbleOther: {
+    backgroundColor: paperColors.card,
+    borderBottomLeftRadius: 4,
+    ...paperShadow,
+  },
+  bubbleText: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 15,
+    lineHeight: 21,
+  },
+  bubbleTextMine: {
+    color: paperColors.card,
+  },
+  emptyBox: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    gap: 9,
+    marginHorizontal: 24,
+    marginTop: 88,
+    paddingHorizontal: 22,
+    paddingVertical: 24,
+    position: 'relative',
+    ...paperShadow,
+  },
+  emptyDesc: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  emptyTitle: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 21,
+    lineHeight: 26,
   },
   flex: {
     flex: 1,
   },
-
-  // 로딩 & 빈 상태
+  iconButton: {
+    alignItems: 'center',
+    height: 38,
+    justifyContent: 'center',
+    width: 38,
+  },
+  inputBar: {
+    alignItems: 'flex-end',
+    backgroundColor: 'rgba(251,247,240,0.96)',
+    borderTopColor: paperColors.ink0,
+    borderTopWidth: 1.2,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingTop: 10,
+  },
   loadingBox: {
     alignItems: 'center',
     flex: 1,
+    gap: 10,
     justifyContent: 'center',
   },
-  emptyBox: {
-    alignItems: 'center',
-    flex: 1,
-    gap: spacing.sm,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.xxl,
+  loadingText: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 14,
+    lineHeight: 19,
   },
-  emptyTitle: {
-    color: colors.text.primary,
-    fontSize: typography.title.fontSize,
-    fontWeight: typography.title.fontWeight,
+  messageContent: {
+    flexShrink: 1,
+    gap: 3,
   },
-  emptyDesc: {
-    color: colors.text.secondary,
-    fontSize: typography.body.fontSize,
+  messageContentMine: {
+    alignItems: 'flex-end',
   },
-
-  // 메시지 리스트
   messageList: {
-    gap: spacing.xs,
-    padding: spacing.md,
-    paddingBottom: spacing.sm,
+    gap: 9,
+    paddingBottom: 12,
+    paddingHorizontal: 14,
+    paddingTop: 10,
   },
   messageRow: {
     alignItems: 'flex-end',
     flexDirection: 'row',
-    gap: spacing.xs,
-    maxWidth: '85%',
+    gap: 8,
+    maxWidth: '86%',
   },
   messageRowMine: {
     alignSelf: 'flex-end',
     flexDirection: 'row-reverse',
   },
-  messageContent: {
-    gap: 2,
-    flexShrink: 1,
+  screen: {
+    backgroundColor: paperColors.paper0,
+    flex: 1,
   },
-  avatar: {
+  sendButton: {
     alignItems: 'center',
-    backgroundColor: colors.brand.butterSoft,
-    borderColor: colors.line.warm,
-    borderWidth: 1,
-    borderRadius: 16,
-    height: 32,
+    backgroundColor: paperColors.ink0,
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 1.3,
+    height: 40,
     justifyContent: 'center',
-    width: 32,
+    marginBottom: 1,
+    width: 40,
   },
-  avatarText: {
-    color: colors.text.primary,
-    fontSize: 13,
-    fontWeight: '700',
+  sendButtonDisabled: {
+    backgroundColor: paperColors.ink3,
+    borderColor: paperColors.ink2,
   },
   senderName: {
-    color: colors.text.secondary,
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 2,
-    paddingLeft: 2,
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 11,
+    lineHeight: 15,
+    paddingLeft: 3,
   },
-
-  // 버블
-  bubble: {
+  textInput: {
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
     borderRadius: 18,
-    maxWidth: '100%',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  bubbleOther: {
-    backgroundColor: colors.surface.raised,
-    borderColor: colors.line.soft,
-    borderWidth: 1,
-    borderBottomLeftRadius: 4,
-  },
-  bubbleMine: {
-    backgroundColor: colors.surface.inverse,
-    borderColor: colors.brand.accent,
-    borderWidth: 1,
-    borderBottomRightRadius: 4,
-  },
-  bubbleText: {
-    color: colors.text.primary,
-    fontSize: typography.body.fontSize,
-    lineHeight: typography.body.lineHeight,
-  },
-  bubbleTextMine: {
-    color: colors.text.inverse,
+    borderWidth: 1.4,
+    color: paperColors.ink0,
+    flex: 1,
+    fontFamily: paperFonts.handBold,
+    fontSize: 15,
+    lineHeight: 21,
+    maxHeight: 110,
+    paddingHorizontal: 13,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 7,
   },
   timestamp: {
-    color: colors.text.tertiary,
-    fontSize: 11,
+    color: paperColors.ink3,
+    fontFamily: paperFonts.handBold,
+    fontSize: 10,
+    lineHeight: 14,
     paddingLeft: 4,
   },
   timestampMine: {
@@ -313,41 +368,19 @@ const styles = StyleSheet.create({
     paddingRight: 4,
     textAlign: 'right',
   },
-
-  // 입력 바
-  inputBar: {
-    alignItems: 'flex-end',
-    backgroundColor: colors.bg.warm,
-    borderTopColor: colors.line.warm,
-    borderTopWidth: 1,
-    flexDirection: 'row',
-    gap: spacing.xs,
-    paddingBottom: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.xs,
-  },
-  textInput: {
-    backgroundColor: colors.surface.raised,
-    borderColor: colors.line.warm,
-    borderWidth: 1,
-    borderRadius: radius.input,
-    color: colors.text.primary,
-    flex: 1,
-    fontSize: typography.body.fontSize,
-    maxHeight: 100,
-    paddingHorizontal: spacing.md,
-    paddingVertical: Platform.OS === 'ios' ? spacing.sm : spacing.xs,
-  },
-  sendButton: {
+  topBar: {
     alignItems: 'center',
-    backgroundColor: colors.brand.primary,
-    borderRadius: radius.pill,
-    height: 36,
-    justifyContent: 'center',
-    marginBottom: 2,
-    width: 36,
+    flexDirection: 'row',
+    gap: 8,
+    paddingBottom: 6,
+    paddingHorizontal: 16,
   },
-  sendButtonDisabled: {
-    backgroundColor: colors.line.soft,
+  topTitle: {
+    color: paperColors.ink0,
+    flex: 1,
+    fontFamily: paperFonts.pen,
+    fontSize: 26,
+    lineHeight: 32,
+    textAlign: 'center',
   },
 });

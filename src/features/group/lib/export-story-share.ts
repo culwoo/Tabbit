@@ -19,7 +19,8 @@ type ExportStoryShareResult =
       ok: true;
       imagePath: string;
       shared: boolean;
-      storyCard: StoryCardRow;
+      storyCard: StoryCardRow | null;
+      snapshotWarning?: string;
     }
   | {
       ok: false;
@@ -42,6 +43,70 @@ function getExportPlatform() {
   return expoOs === 'android' || expoOs === 'ios' || expoOs === 'web' ? expoOs : 'unknown';
 }
 
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : '스토리 카드 기록을 저장하지 못했습니다.';
+}
+
+async function trySaveSnapshot({
+  assetId,
+  baseContext,
+  groupId,
+  imagePath,
+  incrementExportCount,
+  layoutVersion,
+  lifeDay,
+  shared,
+  tagId,
+}: {
+  assetId: string | null;
+  baseContext: Record<string, string>;
+  groupId: string;
+  imagePath: string;
+  incrementExportCount?: boolean;
+  layoutVersion: string;
+  lifeDay: string;
+  shared: boolean;
+  tagId: string;
+}) {
+  try {
+    const storyCard = await saveStoryCardSnapshot({
+      assetId,
+      groupId,
+      groupTagId: tagId,
+      imageUri: imagePath,
+      incrementExportCount,
+      layoutVersion,
+      lifestyleDate: lifeDay,
+      platform: getExportPlatform(),
+      shared,
+    });
+
+    trackEvent('snapshot_saved', {
+      ...baseContext,
+      imagePath,
+      storyCardId: storyCard.id,
+    });
+
+    return { storyCard, warning: undefined };
+  } catch (error) {
+    const warning = getErrorMessage(error);
+
+    trackEvent('snapshot_save_failed', {
+      ...baseContext,
+      imagePath,
+      reason: warning,
+    });
+    captureHandledError(error, {
+      ...baseContext,
+      exportStage: 'snapshot_save',
+      imagePath,
+      reason: warning,
+    });
+
+    return { storyCard: null, warning };
+  }
+}
+
 export async function exportStoryShare({
   captureTarget,
   groupId,
@@ -51,10 +116,10 @@ export async function exportStoryShare({
   shareAfterSave,
 }: ExportStoryShareParams): Promise<ExportStoryShareResult> {
   const baseContext = {
-    userId: exportedBy,
     groupId,
-    tagId,
     lifeDay,
+    tagId,
+    userId: exportedBy,
   };
 
   trackEvent('share_export_started', {
@@ -82,21 +147,15 @@ export async function exportStoryShare({
     const imagePath = asset.uri ?? capturedUri;
     const layoutVersion = 'share-mode-v1';
 
-    let storyCard = await saveStoryCardSnapshot({
-      groupId,
-      groupTagId: tagId,
-      lifestyleDate: lifeDay,
-      imageUri: imagePath,
+    let snapshotResult = await trySaveSnapshot({
       assetId: asset.id,
-      layoutVersion,
-      shared: false,
-      platform: getExportPlatform(),
-    });
-
-    trackEvent('snapshot_saved', {
-      ...baseContext,
+      baseContext,
+      groupId,
       imagePath,
-      storyCardId: storyCard.id,
+      layoutVersion,
+      lifeDay,
+      shared: false,
+      tagId,
     });
 
     let shared = false;
@@ -112,35 +171,40 @@ export async function exportStoryShare({
         mimeType: 'image/png',
       });
       shared = true;
-      storyCard = await saveStoryCardSnapshot({
-        groupId,
-        groupTagId: tagId,
-        lifestyleDate: lifeDay,
-        imageUri: imagePath,
+
+      const sharedSnapshotResult = await trySaveSnapshot({
         assetId: asset.id,
-        layoutVersion,
-        shared: true,
-        platform: getExportPlatform(),
+        baseContext,
+        groupId,
+        imagePath,
         incrementExportCount: false,
+        layoutVersion,
+        lifeDay,
+        shared: true,
+        tagId,
       });
+
+      snapshotResult = sharedSnapshotResult.storyCard ? sharedSnapshotResult : snapshotResult;
     }
 
     trackEvent('share_export_succeeded', {
       ...baseContext,
       exportStage: shared ? 'share' : 'save',
+      snapshotSaved: Boolean(snapshotResult.storyCard),
     });
 
     return {
-      ok: true,
       imagePath,
+      ok: true,
       shared,
-      storyCard,
+      snapshotWarning: snapshotResult.warning,
+      storyCard: snapshotResult.storyCard,
     };
   } catch (error) {
     const exportError =
       error instanceof StoryShareExportError
         ? error
-        : new StoryShareExportError('스토리 export 중 예기치 못한 오류가 발생했습니다.', 'save');
+        : new StoryShareExportError('스토리 export 중 예상하지 못한 오류가 발생했습니다.', 'save');
 
     trackEvent('share_export_failed', {
       ...baseContext,
@@ -155,8 +219,8 @@ export async function exportStoryShare({
     });
 
     return {
-      ok: false,
       message: exportError.message,
+      ok: false,
       stage: exportError.stage,
     };
   }

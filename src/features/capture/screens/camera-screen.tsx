@@ -1,29 +1,39 @@
-import { useEffect, useState } from 'react';
+import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   BackHandler,
+  KeyboardAvoidingView,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   View,
-  Image,
 } from 'react-native';
 
 import { Ionicons } from '@expo/vector-icons';
-import { router, useNavigation, usePathname } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
+import { CameraView, useCameraPermissions, type CameraCapturedPicture } from 'expo-camera';
+import { router, useLocalSearchParams, useNavigation, usePathname } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { AppHeader } from '@/components/shell/app-header';
-import { AppButton } from '@/components/ui/app-button';
+import {
+  PhotoBlock,
+  Tape,
+  paperColors,
+  paperFonts,
+  paperShadow,
+  stripHash,
+  type PaperTone,
+} from '@/components/ui/paper-design';
 import { useCaptureSession } from '@/features/capture/capture-session';
-import type { MediaSource, UploadProgressPhase } from '@/features/capture/types';
-import { useAppColors } from '@/hooks/use-app-colors';
-import { formatLifeDayLabel, formatTimestampLabel } from '@/lib/life-day';
+import type { CaptureTagOption, MediaSource, UploadProgressPhase } from '@/features/capture/types';
+import { resolveLifestyleDate } from '@/lib/domain';
+import { formatTimestampLabel } from '@/lib/life-day';
+import { useFontPreference } from '@/providers/font-preference-provider';
 
 const sourceLabels: Record<MediaSource, string> = {
   camera: '카메라',
@@ -33,19 +43,44 @@ const sourceLabels: Record<MediaSource, string> = {
 const uploadPhaseLabels: Record<UploadProgressPhase, string> = {
   idle: '대기',
   prepareUpload: '이미지 준비',
-  uploadMedia: 'Storage 이미지 업로드',
-  'saveCertification/shareTargets': '인증/공유 대상 저장',
+  uploadMedia: '사진 업로드',
+  'saveCertification/shareTargets': '인증 저장',
+};
+
+const TAG_TONES: Record<string, PaperTone> = {
+  '1만원데이': 'sky',
+  공부: 'peach',
+  기상: 'butter',
+  독서: 'peach',
+  명상: 'lilac',
+  무지출: 'sky',
+  미라클모닝: 'butter',
+  식단: 'sage',
+  음악: 'lilac',
+  운동: 'sage',
+  헬스: 'sage',
 };
 
 function formatUploadPhaseLabel(phase: UploadProgressPhase | null) {
   return phase ? uploadPhaseLabels[phase] : null;
 }
 
+function formatShortDate() {
+  const [, month, day] = resolveLifestyleDate(new Date()).split('-');
+  return `오늘 · ${Number(month)}.${Number(day)}`;
+}
+
+function toneForTag(label?: string, index = 0): PaperTone {
+  const clean = stripHash(label ?? '');
+  return TAG_TONES[clean] ?? (['sage', 'peach', 'sky', 'butter', 'lilac'] as PaperTone[])[index % 5];
+}
+
 export default function CameraScreen() {
-  const colors = useAppColors();
+  const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
   const navigation = useNavigation();
   const pathname = usePathname();
+  const params = useLocalSearchParams<{ tag?: string }>();
   const {
     stage,
     draft,
@@ -55,13 +90,14 @@ export default function CameraScreen() {
     tagDirectoryStatus,
     tagDirectoryError,
     lastCompletedUpload,
-    simulateFailureOnce,
     reloadCaptureTags,
     createPersonalTag,
     openSourceSelector,
     requestAssetFromSource,
+    setCapturedAsset,
     setCaption,
     toggleTag,
+    toggleShareTarget,
     goToCompose,
     goToPreview,
     submitDraft,
@@ -69,11 +105,16 @@ export default function CameraScreen() {
     cancelFlow,
     clearLastError,
     beginAnotherCapture,
-    setSimulateFailureOnce,
   } = useCaptureSession();
 
   const [newPersonalTagLabel, setNewPersonalTagLabel] = useState('');
   const [isCreatingPersonalTag, setCreatingPersonalTag] = useState(false);
+  const [showNewTag, setShowNewTag] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [cameraReady, setCameraReady] = useState(false);
+  const [isTakingPicture, setTakingPicture] = useState(false);
+  const cameraRef = useRef<CameraView | null>(null);
+  const appliedInitialTagRef = useRef<string | null>(null);
 
   const isBusyPreparing = stage === 'permissionCheck' || stage === 'captureOrPick';
   const isUploading = uploadJob.status === 'running';
@@ -84,6 +125,31 @@ export default function CameraScreen() {
     !isUploading;
   const deniedPermissions = (Object.values(permissions) ?? []).filter((permission) => !permission?.granted);
   const isShareRoute = pathname === '/capture/share';
+  const selectedTags = useMemo(
+    () => availableTags.filter((tag) => draft.selectedTagIds.includes(tag.id)),
+    [availableTags, draft.selectedTagIds],
+  );
+  const selectedPersonalTagCount = selectedTags.filter((tag) => tag.kind === 'personal').length;
+  const activeTargets = draft.resolvedTargets.filter(
+    (target) => !draft.disabledGroupIds.includes(target.groupId),
+  );
+  const requestedTagLabel = Array.isArray(params.tag) ? params.tag[0] : params.tag;
+
+  const confirmDiscardDraft = useCallback(() => {
+    Alert.alert('초안을 버릴까요?', '선택한 사진, 문구, 태그가 사라집니다.', [
+      {
+        style: 'cancel',
+        text: '계속 편집',
+      },
+      {
+        onPress: () => {
+          cancelFlow();
+        },
+        style: 'destructive',
+        text: '버리고 나가기',
+      },
+    ]);
+  }, [cancelFlow]);
 
   useEffect(() => {
     if (isFocused && stage === 'idle') {
@@ -92,10 +158,47 @@ export default function CameraScreen() {
   }, [isFocused, openSourceSelector, stage]);
 
   useEffect(() => {
+    if (!isFocused || stage !== 'sourceSelect') {
+      return;
+    }
+
+    if (cameraPermission && !cameraPermission.granted && cameraPermission.canAskAgain) {
+      void requestCameraPermission();
+    }
+  }, [cameraPermission, isFocused, requestCameraPermission, stage]);
+
+  useEffect(() => {
     if (isFocused) {
       void reloadCaptureTags();
     }
   }, [isFocused, reloadCaptureTags]);
+
+  useEffect(() => {
+    const normalizedRequestedTag = stripHash(requestedTagLabel ?? '').toLocaleLowerCase('ko-KR');
+
+    if (
+      !isFocused ||
+      !normalizedRequestedTag ||
+      tagDirectoryStatus !== 'ready' ||
+      draft.selectedTagIds.length > 0 ||
+      appliedInitialTagRef.current === normalizedRequestedTag
+    ) {
+      return;
+    }
+
+    const matchingTag = availableTags.find(
+      (tag) =>
+        tag.id === normalizedRequestedTag ||
+        stripHash(tag.label).toLocaleLowerCase('ko-KR') === normalizedRequestedTag,
+    );
+
+    if (!matchingTag) {
+      return;
+    }
+
+    appliedInitialTagRef.current = normalizedRequestedTag;
+    toggleTag(matchingTag.id);
+  }, [availableTags, draft.selectedTagIds.length, isFocused, requestedTagLabel, tagDirectoryStatus, toggleTag]);
 
   useEffect(() => {
     if (!isFocused || stage !== 'cancelled') {
@@ -107,38 +210,9 @@ export default function CameraScreen() {
   }, [discardDraft, isFocused, stage]);
 
   useEffect(() => {
-    if (!isFocused || stage !== 'success') {
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      router.replace('/');
-      discardDraft('idle');
-    }, 1400);
-
-    return () => clearTimeout(timer);
-  }, [discardDraft, isFocused, stage]);
-
-  useEffect(() => {
     if (!isFocused) {
       return;
     }
-
-    const showDiscardAlert = () => {
-      Alert.alert('초안을 버릴까요?', '촬영한 사진과 입력한 문구, 선택한 태그가 사라집니다.', [
-        {
-          text: '계속 편집',
-          style: 'cancel',
-        },
-        {
-          text: '버리고 나가기',
-          style: 'destructive',
-          onPress: () => {
-            cancelFlow();
-          },
-        },
-      ]);
-    };
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       if (isUploading) {
@@ -151,7 +225,7 @@ export default function CameraScreen() {
       }
 
       if (stage === 'preview' || stage === 'compose' || stage === 'failure') {
-        showDiscardAlert();
+        confirmDiscardDraft();
         return true;
       }
 
@@ -165,26 +239,57 @@ export default function CameraScreen() {
     });
 
     return () => subscription.remove();
-  }, [cancelFlow, discardDraft, isFocused, isUploading, navigation, stage]);
-
-  function confirmDiscardDraft() {
-    Alert.alert('초안을 버릴까요?', '촬영한 사진과 입력한 문구, 선택한 태그가 사라집니다.', [
-      {
-        text: '계속 편집',
-        style: 'cancel',
-      },
-      {
-        text: '버리고 나가기',
-        style: 'destructive',
-        onPress: () => {
-          cancelFlow();
-        },
-      },
-    ]);
-  }
+  }, [cancelFlow, confirmDiscardDraft, discardDraft, isFocused, isUploading, navigation, stage]);
 
   function handleSourcePress(source: MediaSource) {
     void requestAssetFromSource(source);
+  }
+
+  async function handleLiveCapture() {
+    if (isTakingPicture) {
+      return;
+    }
+
+    if (!cameraPermission?.granted) {
+      const permission = await requestCameraPermission();
+      if (!permission.granted) {
+        return;
+      }
+    }
+
+    if (!cameraRef.current || !cameraReady) {
+      return;
+    }
+
+    setTakingPicture(true);
+
+    try {
+      const picture: CameraCapturedPicture = await cameraRef.current.takePictureAsync({
+        base64: false,
+        quality: 1,
+        skipProcessing: false,
+      });
+
+      setCapturedAsset(
+        {
+          base64: picture.base64 ?? null,
+          fileName: null,
+          fileSize: null,
+          height: picture.height,
+          mimeType: picture.format === 'png' ? 'image/png' : 'image/jpeg',
+          uri: picture.uri,
+          width: picture.width,
+        },
+        'camera',
+      );
+    } catch (error) {
+      Alert.alert(
+        '촬영 실패',
+        error instanceof Error ? error.message : '사진을 찍지 못했습니다. 다시 시도해주세요.',
+      );
+    } finally {
+      setTakingPicture(false);
+    }
   }
 
   function handleReplaceAsset(source: MediaSource) {
@@ -208,6 +313,7 @@ export default function CameraScreen() {
     try {
       await createPersonalTag(label);
       setNewPersonalTagLabel('');
+      setShowNewTag(false);
     } catch (error) {
       Alert.alert(
         '태그 생성 실패',
@@ -225,10 +331,6 @@ export default function CameraScreen() {
     if (!isShareRoute) {
       router.push('/capture/share');
     }
-  }
-
-  function openAppSettings() {
-    void Linking.openSettings();
   }
 
   function handleHeaderClose() {
@@ -258,7 +360,7 @@ export default function CameraScreen() {
     }
   }
 
-  function handleReturnToPreview() {
+  function handleReturnToTags() {
     goToPreview();
 
     if (isShareRoute) {
@@ -270,915 +372,1564 @@ export default function CameraScreen() {
     }
   }
 
-  function renderPermissionHelp() {
-    if (deniedPermissions.length === 0) {
-      return null;
-    }
+  function handleBackToCapture() {
+    discardDraft('sourceSelect');
 
-    return deniedPermissions.map((permission) => (
-      <View
-        key={permission.source}
-        style={[
-          styles.sectionCard,
-          {
-            backgroundColor: colors.warningSoft,
-            borderColor: colors.border,
-          },
-        ]}>
-        <View style={styles.permissionHeader}>
-          <Ionicons name="shield-outline" size={18} color={colors.text} />
-          <Text style={[styles.cardTitle, { color: colors.text }]}>
-            {sourceLabels[permission.source]} 권한이 필요합니다
-          </Text>
-        </View>
-        <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-          {permission.canAskAgain
-            ? `${sourceLabels[permission.source]} 접근이 거부되었습니다. 다시 허용을 눌러 권한 요청을 이어가세요.`
-            : `${sourceLabels[permission.source]} 접근이 영구 거부되었습니다. 설정에서 권한을 직접 허용해야 합니다.`}
-        </Text>
-        <View style={styles.rowActions}>
-          {permission.canAskAgain ? (
-            <View style={styles.flexAction}>
-              <AppButton
-                label="다시 허용"
-                onPress={() => handleSourcePress(permission.source)}
-                variant="secondary"
+    if (isShareRoute) {
+      router.replace('/capture');
+    }
+  }
+
+  function openAppSettings() {
+    void Linking.openSettings();
+  }
+
+  if (stage === 'success') {
+    return (
+      <SuccessScreen
+        bottomInset={insets.bottom}
+        lastCompletedUpload={lastCompletedUpload}
+        onAnother={beginAnotherCapture}
+        onClose={handleHeaderClose}
+        topInset={insets.top}
+      />
+    );
+  }
+
+  if (stage === 'preview' && draft.asset) {
+    return (
+      <TagSelectScreen
+        activeTargets={activeTargets}
+        availableTags={availableTags}
+        bottomInset={insets.bottom}
+        deniedPermissions={deniedPermissions}
+        draft={draft}
+        isBusyPreparing={isBusyPreparing}
+        isCreatingPersonalTag={isCreatingPersonalTag}
+        isUploading={isUploading}
+        newPersonalTagLabel={newPersonalTagLabel}
+        onBack={handleBackToCapture}
+        onCreatePersonalTag={() => void handleCreatePersonalTag()}
+        onNext={handleContinueToShare}
+        onOpenSettings={openAppSettings}
+        onReloadTags={() => void reloadCaptureTags()}
+        onReplaceAsset={handleReplaceAsset}
+        onSetNewPersonalTagLabel={setNewPersonalTagLabel}
+        onShowNewTag={setShowNewTag}
+        onToggleShareTarget={toggleShareTarget}
+        onToggleTag={toggleTag}
+        selectedPersonalTagCount={selectedPersonalTagCount}
+        selectedTags={selectedTags}
+        showNewTag={showNewTag}
+        tagDirectoryError={tagDirectoryError}
+        tagDirectoryStatus={tagDirectoryStatus}
+        topInset={insets.top}
+      />
+    );
+  }
+
+  if (
+    (stage === 'compose' ||
+      stage === 'prepareUpload' ||
+      stage === 'uploadMedia' ||
+      stage === 'saveCertification' ||
+      stage === 'failure') &&
+    draft.asset
+  ) {
+    return (
+      <CaptionScreen
+        activeTargets={activeTargets}
+        bottomInset={insets.bottom}
+        canSubmit={canSubmit}
+        draft={draft}
+        isUploading={isUploading}
+        onBack={handleReturnToTags}
+        onCancel={confirmDiscardDraft}
+        onResumeEditing={handleResumeEditing}
+        onSetCaption={setCaption}
+        onSubmit={handleSubmit}
+        selectedTags={selectedTags}
+        stage={stage}
+        topInset={insets.top}
+        uploadJob={uploadJob}
+      />
+    );
+  }
+
+  return (
+    <SourceSelectScreen
+      bottomInset={insets.bottom}
+      cameraPermission={cameraPermission}
+      cameraReady={cameraReady}
+      cameraRef={cameraRef}
+      deniedPermissions={deniedPermissions}
+      isBusyPreparing={isBusyPreparing || isTakingPicture}
+      onCancel={handleHeaderClose}
+      onCameraReady={() => setCameraReady(true)}
+      onOpenSettings={openAppSettings}
+      onPickGallery={() => handleSourcePress('library')}
+      onRequestCameraPermission={() => void requestCameraPermission()}
+      onRetryPermission={(source) => handleSourcePress(source)}
+      onShoot={() => void handleLiveCapture()}
+      stage={stage}
+      topInset={insets.top}
+    />
+  );
+}
+
+type PaperButtonProps = {
+  disabled?: boolean;
+  label: string;
+  onPress: () => void;
+  tone?: 'coral' | 'dark' | 'light';
+};
+
+function PaperButton({ disabled = false, label, onPress, tone = 'dark' }: PaperButtonProps) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      disabled={disabled}
+      onPress={onPress}
+      style={[
+        styles.paperButton,
+        tone === 'coral' ? styles.paperButtonCoral : undefined,
+        tone === 'light' ? styles.paperButtonLight : undefined,
+        disabled ? styles.disabledButton : undefined,
+      ]}>
+      <Text style={[styles.paperButtonText, tone === 'light' ? styles.paperButtonTextDark : undefined]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+type SourceSelectScreenProps = {
+  bottomInset: number;
+  cameraPermission: ReturnType<typeof useCameraPermissions>[0];
+  cameraReady: boolean;
+  cameraRef: RefObject<CameraView | null>;
+  deniedPermissions: { canAskAgain: boolean; granted: boolean; source: MediaSource }[];
+  isBusyPreparing: boolean;
+  onCancel: () => void;
+  onCameraReady: () => void;
+  onOpenSettings: () => void;
+  onPickGallery: () => void;
+  onRequestCameraPermission: () => void;
+  onRetryPermission: (source: MediaSource) => void;
+  onShoot: () => void;
+  stage: string;
+  topInset: number;
+};
+
+function SourceSelectScreen({
+  bottomInset,
+  cameraPermission,
+  cameraReady,
+  cameraRef,
+  deniedPermissions,
+  isBusyPreparing,
+  onCancel,
+  onCameraReady,
+  onOpenSettings,
+  onPickGallery,
+  onRequestCameraPermission,
+  onRetryPermission,
+  onShoot,
+  stage,
+  topInset,
+}: SourceSelectScreenProps) {
+  return (
+    <View style={styles.captureScreen}>
+      <View style={[styles.captureTopBar, { paddingTop: topInset + 4 }]}>
+        <Pressable accessibilityLabel="닫기" onPress={onCancel} style={styles.closeIconButton}>
+          <Ionicons color={paperColors.ink0} name="close" size={23} />
+        </Pressable>
+        <Text style={styles.captureTitle}>오늘의 한 컷</Text>
+        <View style={styles.topPlaceholder} />
+      </View>
+
+      <View style={styles.viewfinderCenter}>
+        <View style={styles.viewfinderPolaroid}>
+          <Tape angle={-8} left={96} top={-12} width={70} />
+          <View style={styles.viewfinderSquare}>
+            {cameraPermission?.granted ? (
+              <CameraView
+                active
+                animateShutter={false}
+                facing="back"
+                mode="picture"
+                onCameraReady={onCameraReady}
+                ref={cameraRef}
+                style={StyleSheet.absoluteFill}
               />
+            ) : (
+              <Pressable onPress={onRequestCameraPermission} style={styles.cameraPermissionPrompt}>
+                <Ionicons color={paperColors.card} name="camera-outline" size={38} />
+                <Text style={styles.cameraPermissionTitle}>카메라 켜기</Text>
+                <Text style={styles.cameraPermissionText}>
+                  허용하면 이 프레임 안에서 바로 확인할 수 있어요
+                </Text>
+              </Pressable>
+            )}
+            <View style={styles.scanLines} />
+            <View style={styles.focusBox}>
+              <View style={[styles.focusCorner, styles.focusCornerTopLeft]} />
+              <View style={[styles.focusCorner, styles.focusCornerTopRight]} />
+              <View style={[styles.focusCorner, styles.focusCornerBottomLeft]} />
+              <View style={[styles.focusCorner, styles.focusCornerBottomRight]} />
             </View>
-          ) : null}
-          <View style={styles.flexAction}>
-            <AppButton label="설정으로 이동" onPress={openAppSettings} variant="secondary" />
-          </View>
-        </View>
-      </View>
-    ));
-  }
-
-  function renderSourceSelect() {
-    return (
-      <>
-        <View
-          style={[
-            styles.sectionCard,
-            {
-              backgroundColor: colors.surface,
-              borderColor: colors.border,
-            },
-          ]}>
-          <Text style={[styles.cardTitle, { color: colors.text }]}>오늘 인증 사진을 골라주세요</Text>
-          <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-            바로 촬영하거나 갤러리에서 이미 찍어둔 사진을 가져올 수 있어요.
-          </Text>
-          <View style={styles.actionColumn}>
-            <AppButton
-              label={isBusyPreparing && stage === 'permissionCheck' ? '권한 확인 중...' : '촬영하기'}
-              onPress={() => handleSourcePress('camera')}
-              disabled={isBusyPreparing}
-            />
-            <AppButton
-              label={stage === 'captureOrPick' ? '사진 준비 중...' : '갤러리에서 선택'}
-              onPress={() => handleSourcePress('library')}
-              variant="secondary"
-              disabled={isBusyPreparing}
-            />
-            <AppButton label="취소" onPress={cancelFlow} variant="secondary" disabled={isBusyPreparing} />
-          </View>
-        </View>
-        {isBusyPreparing ? (
-          <View
-            style={[
-              styles.sectionCard,
-              {
-                backgroundColor: colors.surface,
-                borderColor: colors.border,
-              },
-            ]}>
-            <View style={styles.busyRow}>
-              <ActivityIndicator color={colors.accent} />
-              <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-                {stage === 'permissionCheck'
-                  ? '권한 상태를 확인하고 있습니다.'
-                  : `${draft.sourceType ? sourceLabels[draft.sourceType] : '사진'}를 불러오고 있습니다.`}
-              </Text>
-            </View>
-          </View>
-        ) : null}
-        {renderPermissionHelp()}
-      </>
-    );
-  }
-
-  function renderPreview() {
-    if (!draft.asset) {
-      return null;
-    }
-
-    return (
-      <>
-        <View
-          style={[
-            styles.sectionCard,
-            {
-              backgroundColor: colors.surface,
-              borderColor: colors.border,
-            },
-          ]}>
-          <Text style={[styles.cardTitle, { color: colors.text }]}>사진 확인</Text>
-          <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-            인증에 사용할 사진이 맞는지 한 번만 확인해 주세요.
-          </Text>
-          <Image source={{ uri: draft.asset.uri }} style={styles.previewImage} />
-          <View style={styles.metaGrid}>
-            <View style={styles.metaChip}>
-              <Text style={[styles.metaLabel, { color: colors.textMuted }]}>출처</Text>
-              <Text style={[styles.metaValue, { color: colors.text }]}>
-                {draft.sourceType ? sourceLabels[draft.sourceType] : '-'}
-              </Text>
-            </View>
-            <View style={styles.metaChip}>
-              <Text style={[styles.metaLabel, { color: colors.textMuted }]}>해상도</Text>
-              <Text style={[styles.metaValue, { color: colors.text }]}>
-                {draft.asset.width} × {draft.asset.height}
-              </Text>
-            </View>
-          </View>
-          <View style={styles.actionColumn}>
-            <AppButton label="다시 찍기" onPress={() => handleReplaceAsset('camera')} />
-            <AppButton
-              label="다른 사진 선택"
-              onPress={() => handleReplaceAsset('library')}
-              variant="secondary"
-            />
-            <AppButton label="다음" onPress={handleContinueToShare} variant="secondary" />
-            <AppButton label="취소" onPress={confirmDiscardDraft} variant="secondary" />
-          </View>
-        </View>
-      </>
-    );
-  }
-
-  function renderResolvedTargets() {
-    const selectedPersonalTagCount = availableTags.filter(
-      (tag) => tag.kind === 'personal' && draft.selectedTagIds.includes(tag.id),
-    ).length;
-
-    return (
-      <View
-        style={[
-          styles.sectionCard,
-          {
-            backgroundColor: colors.surface,
-            borderColor: colors.border,
-          },
-        ]}>
-          <Text style={[styles.cardTitle, { color: colors.text }]}>공유될 곳</Text>
-          <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-          선택한 태그와 연결된 그룹만 모아서 보여줍니다.
-        </Text>
-        {draft.resolvedTargets.length === 0 ? (
-          <Text style={[styles.emptyStateText, { color: colors.textMuted }]}>
-            {selectedPersonalTagCount > 0
-              ? '선택한 개인 태그는 개인공간에 저장됩니다. 그룹 공유는 연결된 그룹 태그를 선택하면 추가됩니다.'
-              : '태그를 선택하면 공유될 그룹이 여기에 나타납니다.'}
-          </Text>
-        ) : (
-          <View style={styles.targetList}>
-            {draft.resolvedTargets.map((target, targetIndex) => (
-              <View
-                key={`${target.groupId}-${target.matchedGroupTagIds.join('-')}-${targetIndex}`}
-                style={[
-                  styles.targetCard,
-                  {
-                    backgroundColor: colors.surfaceMuted,
-                    borderColor: colors.border,
-                  },
-                ]}>
-                <View style={styles.targetHeader}>
-                  <Text style={[styles.targetTitle, { color: colors.text }]}>{target.groupName}</Text>
-                  <Text style={[styles.targetSubtitle, { color: colors.textMuted }]}>
-                    {target.memberCount}명 · {target.thresholdSummary}
-                  </Text>
-                </View>
-                <View style={styles.tagRow}>
-                  {target.matchedGroupTagLabels.map((tagLabel) => (
-                    <View
-                      key={`${target.groupId}-${tagLabel}`}
-                      style={[
-                        styles.selectedTagBadge,
-                        {
-                          backgroundColor: colors.accentSoft,
-                        },
-                      ]}>
-                      <Text style={[styles.selectedTagText, { color: colors.accent }]}>{tagLabel}</Text>
-                    </View>
-                  ))}
-                </View>
+            {isBusyPreparing || (cameraPermission?.granted && !cameraReady) ? (
+              <View style={styles.viewfinderBusy}>
+                <ActivityIndicator color={paperColors.card} />
+                <Text style={styles.viewfinderBusyText}>
+                  {stage === 'permissionCheck'
+                    ? '권한 확인 중'
+                    : cameraPermission?.granted && !cameraReady
+                      ? '카메라 켜는 중'
+                      : '사진을 준비하는 중'}
+                </Text>
               </View>
-            ))}
+            ) : null}
           </View>
-        )}
+          <Text style={styles.viewfinderCaption}>{formatShortDate()}</Text>
+        </View>
       </View>
-    );
-  }
 
-  function renderCompose() {
-    if (!draft.asset) {
-      return null;
-    }
+      {deniedPermissions.length > 0 ? (
+        <View style={styles.permissionNotes}>
+          {deniedPermissions.map((permission) => (
+            <View key={permission.source} style={styles.permissionCard}>
+              <Text style={styles.permissionTitle}>
+                {sourceLabels[permission.source]} 권한이 필요해요
+              </Text>
+              <Text style={styles.permissionText}>
+                {permission.canAskAgain
+                  ? '다시 허용을 누르면 권한 요청을 이어갈 수 있어요.'
+                  : '설정에서 권한을 직접 허용해야 계속할 수 있어요.'}
+              </Text>
+              <View style={styles.permissionActions}>
+                {permission.canAskAgain ? (
+                  <PaperButton
+                    label="다시 허용"
+                    onPress={() => onRetryPermission(permission.source)}
+                    tone="light"
+                  />
+                ) : null}
+                <PaperButton label="설정으로" onPress={onOpenSettings} tone="light" />
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : null}
 
-    return (
-      <>
-        <View
-          style={[
-            styles.sectionCard,
-            {
-              backgroundColor: colors.surface,
-              borderColor: colors.border,
-            },
-          ]}>
-          <Text style={[styles.cardTitle, { color: colors.text }]}>한 줄 남기기</Text>
-          <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-            오늘의 인증에 붙일 짧은 문구를 남겨보세요.
-          </Text>
-          <Image source={{ uri: draft.asset.uri }} style={styles.composeImage} />
-          <TextInput
-            value={draft.caption}
-            onChangeText={setCaption}
-            editable={!isUploading}
-            placeholder="오늘의 인증 한 줄을 남겨보세요."
-            placeholderTextColor={colors.textMuted}
-            style={[
-              styles.captionInput,
-              {
-                backgroundColor: colors.background,
-                borderColor: colors.border,
-                color: colors.text,
-              },
-            ]}
-            maxLength={80}
-            multiline
-          />
-          <View style={styles.captionMetaRow}>
-            <Text style={[styles.metaLabel, { color: colors.textMuted }]}>
-              {draft.caption.length}/80자
-            </Text>
-            <Pressable onPress={handleReturnToPreview} disabled={isUploading}>
-              <Text
-                style={[
-                  styles.textLink,
-                  {
-                    color: isUploading ? colors.textMuted : colors.accent,
-                  },
-                ]}>
-                사진 다시 보기
+      <View style={[styles.captureControls, { paddingBottom: bottomInset + 28 }]}>
+        <Pressable
+          accessibilityLabel="갤러리에서 선택"
+          disabled={isBusyPreparing}
+          onPress={onPickGallery}
+          style={[styles.galleryButton, isBusyPreparing ? styles.disabledButton : undefined]}>
+          <View style={styles.galleryThumb}>
+            <View style={styles.galleryThumbInner} />
+          </View>
+          <Text style={styles.controlLabel}>갤러리</Text>
+        </Pressable>
+
+        <Pressable
+          accessibilityLabel="사진 촬영"
+          disabled={isBusyPreparing}
+          onPress={onShoot}
+          style={[styles.shutterButton, isBusyPreparing ? styles.disabledButton : undefined]}>
+          <View style={styles.shutterInner}>
+            <Ionicons color={paperColors.ink0} name="camera" size={28} />
+          </View>
+        </Pressable>
+
+        <View style={styles.controlSpacer} />
+      </View>
+    </View>
+  );
+}
+
+type TagSelectScreenProps = {
+  activeTargets: { groupId: string }[];
+  availableTags: CaptureTagOption[];
+  bottomInset: number;
+  deniedPermissions: { canAskAgain: boolean; granted: boolean; source: MediaSource }[];
+  draft: ReturnType<typeof useCaptureSession>['draft'];
+  isBusyPreparing: boolean;
+  isCreatingPersonalTag: boolean;
+  isUploading: boolean;
+  newPersonalTagLabel: string;
+  onBack: () => void;
+  onCreatePersonalTag: () => void;
+  onNext: () => void;
+  onOpenSettings: () => void;
+  onReloadTags: () => void;
+  onReplaceAsset: (source: MediaSource) => void;
+  onSetNewPersonalTagLabel: (value: string) => void;
+  onShowNewTag: (value: boolean) => void;
+  onToggleShareTarget: (groupId: string) => void;
+  onToggleTag: (tagId: string) => void;
+  selectedPersonalTagCount: number;
+  selectedTags: CaptureTagOption[];
+  showNewTag: boolean;
+  tagDirectoryError: string | null;
+  tagDirectoryStatus: string;
+  topInset: number;
+};
+
+function TagSelectScreen({
+  activeTargets,
+  availableTags,
+  bottomInset,
+  deniedPermissions,
+  draft,
+  isBusyPreparing,
+  isCreatingPersonalTag,
+  isUploading,
+  newPersonalTagLabel,
+  onBack,
+  onCreatePersonalTag,
+  onNext,
+  onOpenSettings,
+  onReloadTags,
+  onReplaceAsset,
+  onSetNewPersonalTagLabel,
+  onShowNewTag,
+  onToggleShareTarget,
+  onToggleTag,
+  selectedPersonalTagCount,
+  selectedTags,
+  showNewTag,
+  tagDirectoryError,
+  tagDirectoryStatus,
+  topInset,
+}: TagSelectScreenProps) {
+  const { bodyTextStyle, strongTextStyle } = useFontPreference();
+  const canGoNext = draft.selectedTagIds.length > 0 && tagDirectoryStatus === 'ready';
+  const privateOnly = draft.resolvedTargets.length === 0 && draft.selectedTagIds.length > 0;
+
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={styles.paperScreen}>
+      <View style={[styles.stepTopBar, { paddingTop: topInset + 4 }]}>
+        <Pressable accessibilityLabel="촬영 화면으로 돌아가기" onPress={onBack} style={styles.stepBackButton}>
+          <Ionicons color={paperColors.ink0} name="chevron-back" size={22} />
+        </Pressable>
+        <Text style={[styles.stepTitle, strongTextStyle]}>어떤 태그야?</Text>
+        <Pressable
+          accessibilityLabel="다른 사진 선택"
+          disabled={isBusyPreparing}
+          onPress={() => onReplaceAsset('library')}
+          style={styles.replaceButton}>
+          <Text style={[styles.replaceButtonText, bodyTextStyle]}>바꾸기</Text>
+        </Pressable>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={[styles.tagScrollContent, { paddingBottom: bottomInset + 132 }]}
+        keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}>
+        <View style={styles.previewPolaroidWrap}>
+          <View style={styles.previewPolaroid}>
+            <Tape angle={-8} left={52} top={-10} width={50} />
+            <PhotoBlock
+              height={118}
+              label=""
+              tone={toneForTag(selectedTags[0]?.label)}
+              uri={draft.asset?.uri}
+              width={118}
+            />
+          </View>
+        </View>
+
+        <View style={styles.tagHeaderRow}>
+          <Text style={[styles.sectionEyebrow, bodyTextStyle]}>내 태그 · {draft.selectedTagIds.length}개 선택</Text>
+          <Pressable onPress={() => onShowNewTag(true)} style={styles.newTagButton}>
+            <Text style={[styles.newTagButtonText, strongTextStyle]}>+ 새 태그</Text>
+          </Pressable>
+        </View>
+
+        {showNewTag ? (
+          <View style={styles.newTagRow}>
+            <TextInput
+              autoFocus
+              editable={!isUploading && !isCreatingPersonalTag}
+              maxLength={24}
+              onChangeText={onSetNewPersonalTagLabel}
+              onSubmitEditing={onCreatePersonalTag}
+              placeholder="새 태그 이름 (예: 독서)"
+              placeholderTextColor={paperColors.ink3}
+              style={[styles.newTagInput, strongTextStyle]}
+              value={newPersonalTagLabel}
+            />
+            <Pressable
+              disabled={!newPersonalTagLabel.trim() || isCreatingPersonalTag || isUploading}
+              onPress={onCreatePersonalTag}
+              style={[
+                styles.newTagCreateButton,
+                (!newPersonalTagLabel.trim() || isCreatingPersonalTag || isUploading) && styles.disabledButton,
+              ]}>
+              <Text style={[styles.newTagCreateText, strongTextStyle]}>
+                {isCreatingPersonalTag ? '만드는 중' : '만들기'}
               </Text>
             </Pressable>
           </View>
+        ) : null}
+
+        <View style={styles.tagChipWrap}>
+          {tagDirectoryStatus === 'loading' ? (
+            <View style={styles.inlineStatus}>
+              <ActivityIndicator color={paperColors.coral} />
+              <Text style={[styles.inlineStatusText, bodyTextStyle]}>그룹 태그를 불러오는 중</Text>
+            </View>
+          ) : null}
+
+          {tagDirectoryStatus === 'failure' ? (
+            <View style={styles.directoryErrorCard}>
+              <Text selectable style={[styles.directoryErrorText, bodyTextStyle]}>
+                {tagDirectoryError ?? '태그 정보를 불러오지 못했습니다.'}
+              </Text>
+              <PaperButton label="다시 불러오기" onPress={onReloadTags} tone="light" />
+            </View>
+          ) : null}
+
+          {tagDirectoryStatus === 'ready' && availableTags.length === 0 ? (
+            <Text style={[styles.emptyTagText, bodyTextStyle]}>
+              아직 선택할 태그가 없어요. 새 태그를 만들면 개인공간에 저장할 수 있어요.
+            </Text>
+          ) : null}
+
+          {availableTags.map((tag, index) => {
+            const active = draft.selectedTagIds.includes(tag.id);
+            const tone = toneForTag(tag.label, index);
+            const isPrivate = tag.kind === 'personal';
+
+            return (
+              <Pressable
+                disabled={isUploading}
+                key={tag.id}
+                onPress={() => onToggleTag(tag.id)}
+                style={[
+                  styles.tagChip,
+                  active
+                    ? { backgroundColor: paperColors[tone], borderColor: paperColors.ink0 }
+                    : isPrivate
+                      ? styles.tagChipPrivate
+                      : undefined,
+                  active ? styles.tagChipActive : undefined,
+                  isUploading ? styles.disabledButton : undefined,
+                ]}>
+                <Text style={[styles.tagChipLabel, strongTextStyle]}>#{stripHash(tag.label)}</Text>
+              </Pressable>
+            );
+          })}
         </View>
 
-        <View
-          style={[
-            styles.sectionCard,
-            {
-              backgroundColor: colors.surface,
-              borderColor: colors.border,
-            },
-          ]}>
-          <Text style={[styles.cardTitle, { color: colors.text }]}>태그 선택</Text>
-          <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-            같은 태그를 쓰는 그룹과 개인공간에 함께 저장됩니다.
-          </Text>
-          <View style={styles.tagRow}>
-            {tagDirectoryStatus === 'loading' ? (
-              <View style={styles.busyRow}>
-                <ActivityIndicator color={colors.accent} />
-                <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-                  내 그룹 태그를 불러오고 있습니다.
+        {draft.selectedTagIds.length > 0 ? (
+          <View style={styles.broadcastSection}>
+            <Text style={[styles.sectionEyebrow, bodyTextStyle]}>어디에 올라가는지</Text>
+            {privateOnly ? (
+              <View style={styles.privateOnlyCard}>
+                <Text style={[styles.privateOnlyText, bodyTextStyle]}>
+                  <Text style={styles.strong}>나만 보기</Text> · 개인공간 캘린더에만 저장돼요
                 </Text>
               </View>
             ) : null}
-            {tagDirectoryStatus === 'ready' && availableTags.length === 0 ? (
-              <Text style={[styles.emptyStateText, { color: colors.textMuted }]}>
-                아직 선택할 태그가 없습니다. 아래에서 개인공간 태그를 바로 만들 수 있습니다.
-              </Text>
-            ) : null}
-            {tagDirectoryStatus === 'failure' ? (
-              <View style={styles.tagDirectoryError}>
-                <Text style={[styles.emptyStateText, { color: colors.textMuted }]} selectable>
-                  {tagDirectoryError ?? '태그 정보를 불러오지 못했습니다.'}
-                </Text>
-                <AppButton
-                  label="태그 다시 불러오기"
-                  onPress={() => void reloadCaptureTags()}
-                  variant="secondary"
-                  disabled={isUploading}
-                />
-              </View>
-            ) : null}
-            {availableTags.map((tag) => {
-              const selected = draft.selectedTagIds.includes(tag.id);
+            {draft.resolvedTargets.map((target, index) => {
+              const off = draft.disabledGroupIds.includes(target.groupId);
+              const tone = toneForTag(target.matchedGroupTagLabels[0], index);
 
               return (
-                <Pressable
-                  key={tag.id}
-                  onPress={() => toggleTag(tag.id)}
-                  disabled={isUploading}
-                  style={[
-                    styles.tagChip,
-                    {
-                      backgroundColor: selected ? colors.accentSoft : colors.background,
-                      borderColor: selected ? colors.accent : colors.border,
-                      opacity: isUploading ? 0.65 : 1,
-                    },
-                  ]}>
-                  <Text style={[styles.tagLabel, { color: selected ? colors.accent : colors.text }]}>
-                    {tag.label}
-                  </Text>
-                  <Text style={[styles.tagMeta, { color: colors.textMuted }]}>
-                    {tag.kind === 'personal'
-                      ? '개인공간'
-                      : tag.personalTagId
-                        ? `${tag.connectedGroupCount}개 그룹 + 개인공간`
-                        : `${tag.connectedGroupCount}개 그룹`}
-                  </Text>
-                </Pressable>
+                <View key={target.groupId} style={[styles.targetRow, off ? styles.targetRowOff : undefined]}>
+                  <View style={[styles.targetAvatar, { backgroundColor: paperColors[tone] }]}>
+                    <Text style={styles.targetAvatarText}>{Array.from(target.groupName)[0] ?? '?'}</Text>
+                  </View>
+                  <View style={styles.targetCopy}>
+                    <Text numberOfLines={1} style={[styles.targetName, strongTextStyle, off ? styles.targetNameOff : undefined]}>
+                      {target.groupName}
+                    </Text>
+                    <Text numberOfLines={1} style={[styles.targetMeta, bodyTextStyle]}>
+                      {target.matchedGroupTagLabels.map((label) => `#${stripHash(label)}`).join(' ')} 로 집계
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityLabel={`${target.groupName} 공유 ${off ? '켜기' : '끄기'}`}
+                    onPress={() => onToggleShareTarget(target.groupId)}
+                    style={[styles.targetSwitch, !off ? styles.targetSwitchOn : undefined]}>
+                    <View style={[styles.targetSwitchKnob, !off ? styles.targetSwitchKnobOn : undefined]} />
+                  </Pressable>
+                </View>
               );
             })}
-          </View>
-          {tagDirectoryStatus === 'ready' ? (
-            <View style={styles.personalTagCreator}>
-              <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-                원하는 태그가 없으면 개인공간 태그로 먼저 저장하세요.
-              </Text>
-              <View style={styles.personalTagInputRow}>
-                <TextInput
-                  value={newPersonalTagLabel}
-                  onChangeText={setNewPersonalTagLabel}
-                  editable={!isUploading && !isCreatingPersonalTag}
-                  placeholder="예: #운동"
-                  placeholderTextColor={colors.textMuted}
-                  style={[
-                    styles.personalTagInput,
-                    {
-                      backgroundColor: colors.background,
-                      borderColor: colors.border,
-                      color: colors.text,
-                    },
-                  ]}
-                  maxLength={24}
-                  onSubmitEditing={() => void handleCreatePersonalTag()}
-                />
-                <View style={styles.personalTagButton}>
-                  <AppButton
-                    label={isCreatingPersonalTag ? '추가 중...' : '개인 태그 추가'}
-                    onPress={() => void handleCreatePersonalTag()}
-                    variant="secondary"
-                    disabled={!newPersonalTagLabel.trim() || isUploading || isCreatingPersonalTag}
-                  />
-                </View>
-              </View>
-            </View>
-          ) : null}
-          {draft.selectedTagIds.length === 0 ? (
-            <Text style={[styles.emptyStateText, { color: colors.textMuted }]}>
-              공유하려면 최소 1개 태그를 선택해야 합니다.
-            </Text>
-          ) : null}
-        </View>
-
-        {renderResolvedTargets()}
-
-        {draft.lastError ? (
-          <View
-            style={[
-              styles.sectionCard,
-              {
-                backgroundColor: colors.warningSoft,
-                borderColor: colors.border,
-              },
-            ]}>
-            <View style={styles.permissionHeader}>
-              <Ionicons name="alert-circle-outline" size={18} color={colors.text} />
-              <Text style={[styles.cardTitle, { color: colors.text }]}>업로드를 완료하지 못했습니다</Text>
-            </View>
-            <Text style={[styles.cardDescription, { color: colors.textMuted }]} selectable>
-              {draft.lastError}
-            </Text>
-            {uploadJob.errorCode || uploadJob.errorPhase ? (
-              <View style={styles.errorMetaList}>
-                {uploadJob.errorPhase ? (
-                  <Text style={[styles.metaLabel, { color: colors.textMuted }]}>
-                    실패 단계: {formatUploadPhaseLabel(uploadJob.errorPhase)}
-                  </Text>
-                ) : null}
-                {uploadJob.errorCode ? (
-                  <Text style={[styles.metaLabel, { color: colors.textMuted }]}>
-                    오류 코드: {uploadJob.errorCode}
-                  </Text>
-                ) : null}
-              </View>
-            ) : null}
-            {uploadJob.errorDetails ? (
-              <View
-                style={[
-                  styles.errorLogBox,
-                  {
-                    backgroundColor: colors.background,
-                    borderColor: colors.border,
-                  },
-                ]}>
-                <Text style={[styles.errorLogTitle, { color: colors.text }]}>원본 오류 로그</Text>
-                <Text style={[styles.errorLogText, { color: colors.textMuted }]} selectable>
-                  {uploadJob.errorDetails}
+            {activeTargets.length > 0 && selectedPersonalTagCount > 0 ? (
+              <View style={styles.privateOnlyCard}>
+                <Text style={[styles.privateOnlyText, bodyTextStyle]}>
+                  개인 태그 {selectedPersonalTagCount}개도 개인공간에 저장돼요
                 </Text>
               </View>
+            ) : null}
+          </View>
+        ) : null}
+
+        {deniedPermissions.length > 0 ? (
+          <View style={styles.directoryErrorCard}>
+            <Text style={[styles.directoryErrorText, bodyTextStyle]}>
+              권한이 막힌 항목이 있어요. 사진을 바꾸려면 설정에서 허용해주세요.
+            </Text>
+            <PaperButton label="설정으로" onPress={onOpenSettings} tone="light" />
+          </View>
+        ) : null}
+      </ScrollView>
+
+      <View style={[styles.stickyCta, { paddingBottom: bottomInset + 22 }]}>
+        <PaperButton
+          disabled={!canGoNext || isUploading}
+          label={canGoNext ? '다음 · 한마디 적기' : '태그를 골라줘'}
+          onPress={onNext}
+        />
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+
+type CaptionScreenProps = {
+  activeTargets: { groupName: string }[];
+  bottomInset: number;
+  canSubmit: boolean;
+  draft: ReturnType<typeof useCaptureSession>['draft'];
+  isUploading: boolean;
+  onBack: () => void;
+  onCancel: () => void;
+  onResumeEditing: () => void;
+  onSetCaption: (caption: string) => void;
+  onSubmit: () => void;
+  selectedTags: CaptureTagOption[];
+  stage: string;
+  topInset: number;
+  uploadJob: ReturnType<typeof useCaptureSession>['uploadJob'];
+};
+
+function CaptionScreen({
+  activeTargets,
+  bottomInset,
+  canSubmit,
+  draft,
+  isUploading,
+  onBack,
+  onCancel,
+  onResumeEditing,
+  onSetCaption,
+  onSubmit,
+  selectedTags,
+  stage,
+  topInset,
+  uploadJob,
+}: CaptionScreenProps) {
+  const { bodyTextStyle, strongTextStyle } = useFontPreference();
+  const firstTag = selectedTags[0];
+
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={styles.paperScreen}>
+      <View style={[styles.stepTopBar, { paddingTop: topInset + 4 }]}>
+        <Pressable accessibilityLabel="태그 선택으로 돌아가기" disabled={isUploading} onPress={onBack} style={styles.stepBackButton}>
+          <Ionicons color={isUploading ? paperColors.ink3 : paperColors.ink0} name="chevron-back" size={22} />
+        </Pressable>
+        <Text style={[styles.stepTitle, strongTextStyle]}>
+          한마디 적을래? <Text style={styles.optionalText}>선택</Text>
+        </Text>
+        <Pressable disabled={isUploading} onPress={onCancel} style={styles.closeTextButton}>
+          <Text style={[styles.closeTextButtonText, bodyTextStyle, isUploading ? styles.mutedText : undefined]}>취소</Text>
+        </Pressable>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={[styles.captionScrollContent, { paddingBottom: bottomInset + 132 }]}
+        keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}>
+        <View style={styles.bigPolaroidWrap}>
+          <View style={styles.bigPolaroid}>
+            <Tape angle={-8} left={84} top={-12} width={70} />
+            <PhotoBlock
+              height={220}
+              label=""
+              tone={toneForTag(firstTag?.label)}
+              uri={draft.asset?.uri}
+              width={220}
+            />
+          </View>
+        </View>
+
+        <View style={styles.selectedTagRow}>
+          {selectedTags.map((tag, index) => {
+            const tone = toneForTag(tag.label, index);
+            return (
+              <Text key={tag.id} style={[styles.selectedTag, { backgroundColor: paperColors[tone] }]}>
+                #{stripHash(tag.label)}
+              </Text>
+            );
+          })}
+        </View>
+
+        <View style={styles.captionInputCard}>
+          <Text style={[styles.inputEyebrow, bodyTextStyle]}>오늘의 한 줄</Text>
+          <TextInput
+            editable={!isUploading}
+            maxLength={40}
+            onChangeText={(value) => onSetCaption(value.slice(0, 40))}
+            placeholder="필라테스 1시간 / 카페에서 4시간 집중 ..."
+            placeholderTextColor={paperColors.ink3}
+            style={[styles.captionInput, strongTextStyle]}
+            value={draft.caption}
+          />
+          <Text style={[styles.captionCount, bodyTextStyle]}>{draft.caption.length}/40</Text>
+        </View>
+
+        <View style={styles.uploadSummary}>
+          <Text style={[styles.uploadSummaryTitle, strongTextStyle]}>✓ 올리면</Text>
+          <Text style={[styles.uploadSummaryText, bodyTextStyle]}>· 개인공간 캘린더에 기록돼요</Text>
+          {activeTargets.length > 0 ? (
+            <Text style={[styles.uploadSummaryText, bodyTextStyle]}>
+              · <Text style={styles.strong}>{activeTargets.map((target) => target.groupName).join(', ')}</Text>에도 자동 공유
+            </Text>
+          ) : (
+            <Text style={[styles.uploadSummaryText, bodyTextStyle]}>· 선택한 그룹 공유는 꺼져 있어요</Text>
+          )}
+        </View>
+
+        {draft.lastError ? (
+          <View style={styles.uploadErrorCard}>
+            <View style={styles.errorTitleRow}>
+              <Ionicons color={paperColors.ink0} name="alert-circle-outline" size={18} />
+              <Text style={[styles.errorTitle, strongTextStyle]}>업로드를 완료하지 못했어요</Text>
+            </View>
+            <Text selectable style={[styles.errorBody, bodyTextStyle]}>{draft.lastError}</Text>
+            {uploadJob.errorPhase ? (
+              <Text style={[styles.errorMeta, bodyTextStyle]}>실패 단계: {formatUploadPhaseLabel(uploadJob.errorPhase)}</Text>
+            ) : null}
+            {uploadJob.errorCode ? <Text style={[styles.errorMeta, bodyTextStyle]}>오류 코드: {uploadJob.errorCode}</Text> : null}
+            {uploadJob.errorDetails ? (
+              <Text selectable style={styles.errorLog}>
+                {uploadJob.errorDetails}
+              </Text>
             ) : null}
           </View>
         ) : null}
 
         {isUploading ? (
-          <View
-            style={[
-              styles.sectionCard,
-              {
-                backgroundColor: colors.surface,
-                borderColor: colors.border,
-              },
-            ]}>
-            <View style={styles.busyRow}>
-              <ActivityIndicator color={colors.accent} />
-              <View style={styles.busyCopy}>
-                <Text style={[styles.cardTitle, { color: colors.text }]}>업로드 진행 중</Text>
-                <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-                  {uploadJob.progressPhase === 'prepareUpload'
-                    ? '사진을 압축하고 업로드를 준비하고 있습니다.'
-                    : uploadJob.progressPhase === 'uploadMedia'
-                      ? '이미지 파일을 전송하고 있습니다.'
-                      : '인증과 공유 대상을 저장하고 목록을 새로고침하고 있습니다.'}
-                </Text>
-              </View>
+          <View style={styles.uploadingCard}>
+            <ActivityIndicator color={paperColors.coral} />
+            <View style={styles.uploadingCopy}>
+              <Text style={[styles.uploadingTitle, strongTextStyle]}>업로드 진행 중</Text>
+              <Text style={[styles.uploadingText, bodyTextStyle]}>
+                {uploadJob.progressPhase === 'prepareUpload'
+                  ? '사진을 정리하고 있어요.'
+                  : uploadJob.progressPhase === 'uploadMedia'
+                    ? '이미지 파일을 전송하고 있어요.'
+                    : '인증과 공유 대상을 저장하고 있어요.'}
+              </Text>
             </View>
           </View>
         ) : null}
 
-        {__DEV__ ? (
-          <View
-            style={[
-              styles.sectionCard,
-              {
-                backgroundColor: colors.surface,
-                borderColor: colors.border,
-              },
-            ]}>
-            <View style={styles.debugHeader}>
-              <View style={styles.debugCopy}>
-                <Text style={[styles.cardTitle, { color: colors.text }]}>개발용 실패 시뮬레이션</Text>
-                <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-                  다음 업로드 한 번만 네트워크 실패로 처리해 재시도 UX를 확인합니다.
-                </Text>
-              </View>
-              <Switch
-                value={simulateFailureOnce}
-                onValueChange={setSimulateFailureOnce}
-                disabled={isUploading}
-              />
-            </View>
-          </View>
+        {stage === 'failure' ? (
+          <Pressable onPress={onResumeEditing} style={styles.editAgainButton}>
+            <Text style={[styles.editAgainButtonText, strongTextStyle]}>문구와 태그 다시 보기</Text>
+          </Pressable>
         ) : null}
 
-        <View style={styles.actionColumn}>
-          <AppButton
-            label={stage === 'failure' ? '다시 시도' : '공유하기'}
-            onPress={handleSubmit}
-            disabled={!canSubmit}
-          />
-          {stage === 'failure' ? (
-            <AppButton label="문구 수정" onPress={handleResumeEditing} variant="secondary" />
-          ) : null}
-          <AppButton
-            label="태그 수정"
-            onPress={handleResumeEditing}
-            variant="secondary"
-            disabled={isUploading}
-          />
-          <AppButton label="취소" onPress={confirmDiscardDraft} variant="secondary" disabled={isUploading} />
-        </View>
-      </>
-    );
-  }
+      </ScrollView>
 
-  function renderSuccess() {
-    return (
-      <View
-        style={[
-          styles.sectionCard,
-          {
-            backgroundColor: colors.successSoft,
-            borderColor: colors.border,
-          },
-        ]}>
-        <View style={styles.permissionHeader}>
-          <Ionicons name="checkmark-circle-outline" size={20} color={colors.text} />
-          <Text style={[styles.cardTitle, { color: colors.text }]}>
-            {lastCompletedUpload
-              ? lastCompletedUpload.completedGroupCount > 0 && lastCompletedUpload.personalTagLabels.length > 0
-                ? `${lastCompletedUpload.completedGroupCount}개 그룹 + 개인공간 저장 완료`
-                : lastCompletedUpload.completedGroupCount > 0
-                  ? `${lastCompletedUpload.completedGroupCount}개 그룹에 공유 완료`
-                  : '개인공간 저장 완료'
-              : '공유가 완료되었습니다'}
-          </Text>
-        </View>
-        <Text style={[styles.cardDescription, { color: colors.textMuted }]}>
-          홈으로 잠시 후 돌아갑니다. 같은 세션 안에서는 최신 인증 정보가 홈에도 반영됩니다.
+      <View style={[styles.stickyCta, { paddingBottom: bottomInset + 22 }]}>
+        <PaperButton
+          disabled={!canSubmit}
+          label={stage === 'failure' ? '다시 시도 →' : '공유하기 →'}
+          onPress={onSubmit}
+          tone="coral"
+        />
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+
+type SuccessScreenProps = {
+  bottomInset: number;
+  lastCompletedUpload: ReturnType<typeof useCaptureSession>['lastCompletedUpload'];
+  onAnother: () => void;
+  onClose: () => void;
+  topInset: number;
+};
+
+function SuccessScreen({ bottomInset, lastCompletedUpload, onAnother, onClose, topInset }: SuccessScreenProps) {
+  return (
+    <View style={styles.paperScreen}>
+      <View style={[styles.successTopBar, { paddingTop: topInset + 6 }]}>
+        <View style={styles.topPlaceholder} />
+        <Pressable accessibilityLabel="홈으로 돌아가기" onPress={onClose} style={styles.successCloseButton}>
+          <Ionicons color={paperColors.ink0} name="close" size={22} />
+        </Pressable>
+      </View>
+      <ScrollView
+        contentContainerStyle={[
+          styles.successContent,
+          { paddingBottom: bottomInset + 28 },
+        ]}
+        showsVerticalScrollIndicator={false}>
+        <Text style={styles.successStamp}>완료</Text>
+        <Text style={styles.successTitle}>
+          {lastCompletedUpload
+            ? lastCompletedUpload.completedGroupCount > 0 && lastCompletedUpload.personalTagLabels.length > 0
+              ? `${lastCompletedUpload.completedGroupCount}개 그룹 + 개인공간 저장 완료`
+              : lastCompletedUpload.completedGroupCount > 0
+                ? `${lastCompletedUpload.completedGroupCount}개 그룹에 공유 완료`
+                : '개인공간 저장 완료'
+            : '공유가 완료됐어요'}
+        </Text>
+        <Text style={styles.successText}>
+          같은 태그 화면에는 최신 인증이 반영돼요. 원할 때 닫고 돌아가면 됩니다.
         </Text>
         {lastCompletedUpload ? (
           <>
-            <Image source={{ uri: lastCompletedUpload.imageUri }} style={styles.successImage} />
-            <View style={styles.metaGrid}>
-              <View style={styles.metaChip}>
-                <Text style={[styles.metaLabel, { color: colors.textMuted }]}>생활일</Text>
-                <Text style={[styles.metaValue, { color: colors.text }]}>
-                  {formatLifeDayLabel(lastCompletedUpload.lifestyleDate)}
-                </Text>
-              </View>
-              <View style={styles.metaChip}>
-                <Text style={[styles.metaLabel, { color: colors.textMuted }]}>수정 가능</Text>
-                <Text style={[styles.metaValue, { color: colors.text }]}>
-                  {formatTimestampLabel(lastCompletedUpload.editableUntil)}
-                </Text>
-              </View>
+            <View style={styles.successPolaroid}>
+              <PhotoBlock
+                height={220}
+                label=""
+                tone={toneForTag(lastCompletedUpload.groupTagLabels[0] ?? lastCompletedUpload.personalTagLabels[0])}
+                uri={lastCompletedUpload.imageUri}
+                width="100%"
+              />
             </View>
-            <View style={styles.tagRow}>
-              {lastCompletedUpload.personalTagLabels.map((tagLabel) => (
-                <View
-                  key={`personal-tag-${tagLabel}`}
-                  style={[
-                    styles.selectedTagBadge,
-                    {
-                      backgroundColor: colors.successSoft,
-                    },
-                  ]}>
-                  <Text style={[styles.selectedTagText, { color: colors.text }]}>{tagLabel}</Text>
-                </View>
+            <Text style={styles.successMeta}>
+              수정 가능 · {formatTimestampLabel(lastCompletedUpload.editableUntil)}
+            </Text>
+            <View style={styles.selectedTagRow}>
+              {lastCompletedUpload.personalTagLabels.map((tag) => (
+                <Text key={`personal-${tag}`} style={[styles.selectedTag, { backgroundColor: paperColors.sage }]}>
+                  #{stripHash(tag)}
+                </Text>
               ))}
-              {lastCompletedUpload.groupTagLabels.map((tagLabel) => (
-                <View
-                  key={`group-tag-${tagLabel}`}
-                  style={[
-                    styles.selectedTagBadge,
-                    {
-                      backgroundColor: colors.accentSoft,
-                    },
-                  ]}>
-                  <Text style={[styles.selectedTagText, { color: colors.accent }]}>{tagLabel}</Text>
-                </View>
-              ))}
-            </View>
-            <View style={styles.tagRow}>
-              {lastCompletedUpload.targets.map((target, targetIndex) => (
-                <View
-                  key={`${target.groupId}-${target.matchedGroupTagIds.join('-')}-${targetIndex}`}
-                  style={[
-                    styles.selectedTagBadge,
-                    {
-                      backgroundColor: colors.surface,
-                    },
-                  ]}>
-                  <Text style={[styles.selectedTagText, { color: colors.text }]}>{target.groupName}</Text>
-                </View>
+              {lastCompletedUpload.groupTagLabels.map((tag) => (
+                <Text key={`group-${tag}`} style={[styles.selectedTag, { backgroundColor: paperColors.peach }]}>
+                  #{stripHash(tag)}
+                </Text>
               ))}
             </View>
           </>
         ) : null}
-        <AppButton label="한 장 더 인증하기" onPress={beginAnotherCapture} />
-      </View>
-    );
-  }
-
-  function renderStagePill() {
-    const label =
-      stage === 'sourceSelect'
-        ? '사진 선택'
-        : stage === 'permissionCheck'
-          ? '권한 확인'
-          : stage === 'captureOrPick'
-            ? '사진 불러오기'
-            : stage === 'preview'
-              ? '사진 확인'
-              : stage === 'compose'
-                ? '공유 준비'
-                : stage === 'prepareUpload'
-                  ? '업로드 준비'
-                  : stage === 'uploadMedia'
-                    ? '사진 업로드'
-                    : stage === 'saveCertification'
-                      ? '기록 저장'
-                      : stage;
-
-    return (
-      <View
-        style={[
-          styles.stagePill,
-          {
-            backgroundColor: colors.accentSoft,
-          },
-        ]}>
-        <Ionicons name="git-branch-outline" size={14} color={colors.accent} />
-        <Text style={[styles.stagePillText, { color: colors.accent }]}>{label}</Text>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.screen}>
-      <AppHeader onBack={handleHeaderClose} title="인증 업로드" variant="capture" />
-      <ScrollView
-        contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={[
-          styles.container,
-          {
-            backgroundColor: colors.background,
-          },
-        ]}>
-        <View
-          style={[
-            styles.hero,
-            {
-              backgroundColor: colors.surface,
-              borderColor: colors.border,
-            },
-          ]}>
-          <Text style={[styles.eyebrow, { color: colors.accent }]}>Today proof</Text>
-          <Text style={[styles.title, { color: colors.text }]}>오늘 인증 올리기</Text>
-          <Text style={[styles.heroDescription, { color: colors.textMuted }]}>
-            사진 한 장과 태그만 고르면 그룹 인증과 개인 기록이 함께 정리됩니다.
-          </Text>
-          {renderStagePill()}
-        </View>
-
-        {stage === 'sourceSelect' || stage === 'permissionCheck' || stage === 'captureOrPick'
-          ? renderSourceSelect()
-          : null}
-        {stage === 'preview' ? renderPreview() : null}
-        {stage === 'compose' ||
-        stage === 'prepareUpload' ||
-        stage === 'uploadMedia' ||
-        stage === 'saveCertification' ||
-        stage === 'failure'
-          ? renderCompose()
-          : null}
-        {stage === 'success' ? renderSuccess() : null}
+        <PaperButton label="하나 더 인증하기" onPress={onAnother} />
       </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
+  bigPolaroid: {
+    backgroundColor: paperColors.card,
+    padding: 12,
+    paddingBottom: 12,
+    position: 'relative',
+    transform: [{ rotate: '-1.5deg' }],
+    ...paperShadow,
   },
-  container: {
-    flexGrow: 1,
-    gap: 16,
-    padding: 20,
-    paddingBottom: 44,
-  },
-  hero: {
-    borderRadius: 30,
-    borderWidth: 1,
-    gap: 10,
-    padding: 20,
-  },
-  eyebrow: {
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 0,
-    textTransform: 'uppercase',
-  },
-  title: {
-    fontSize: 29,
-    fontWeight: '900',
-    lineHeight: 35,
-  },
-  heroDescription: {
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  stagePill: {
+  bigPolaroidWrap: {
     alignItems: 'center',
-    alignSelf: 'flex-start',
-    borderRadius: 999,
-    flexDirection: 'row',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    marginTop: 8,
   },
-  stagePillText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  sectionCard: {
-    borderRadius: 26,
-    borderWidth: 1,
-    gap: 12,
-    padding: 18,
-  },
-  cardTitle: {
-    fontSize: 19,
-    fontWeight: '800',
-    lineHeight: 24,
-  },
-  cardDescription: {
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  actionColumn: {
-    gap: 10,
-  },
-  rowActions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  flexAction: {
-    minWidth: 130,
-    flexGrow: 1,
-  },
-  busyRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  busyCopy: {
-    flex: 1,
-    gap: 4,
-  },
-  permissionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  broadcastSection: {
     gap: 8,
+    marginTop: 22,
   },
-  previewImage: {
-    width: '100%',
-    aspectRatio: 1,
-    borderRadius: 24,
-    backgroundColor: '#D1D5DB',
-  },
-  composeImage: {
-    width: '100%',
-    aspectRatio: 0.95,
-    borderRadius: 24,
-    backgroundColor: '#D1D5DB',
-  },
-  successImage: {
-    width: '100%',
-    aspectRatio: 1,
-    borderRadius: 24,
-    backgroundColor: '#D1D5DB',
-  },
-  metaGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  metaChip: {
-    backgroundColor: 'rgba(255, 255, 255, 0.5)',
-    borderRadius: 16,
-    minWidth: 120,
-    gap: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  metaLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  metaValue: {
-    fontSize: 15,
-    fontWeight: '700',
+  captionCount: {
+    color: paperColors.ink3,
+    fontFamily: paperFonts.handBold,
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: 2,
+    textAlign: 'right',
   },
   captionInput: {
-    minHeight: 96,
-    borderRadius: 18,
-    borderWidth: 1,
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 16,
+    lineHeight: 21,
+    paddingVertical: 4,
+  },
+  captionInputCard: {
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    marginTop: 18,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    fontSize: 15,
-    textAlignVertical: 'top',
   },
-  captionMetaRow: {
-    flexDirection: 'row',
+  captionScrollContent: {
+    paddingHorizontal: 18,
+    paddingTop: 8,
+  },
+  captureControls: {
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  textLink: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  tagRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
+    justifyContent: 'space-between',
+    paddingHorizontal: 32,
+    paddingTop: 10,
   },
-  tagDirectoryError: {
+  captureScreen: {
+    backgroundColor: paperColors.paper0,
+    flex: 1,
+  },
+  captureTitle: {
+    color: paperColors.ink0,
+    flex: 1,
+    fontFamily: paperFonts.pen,
+    fontSize: 22,
+    lineHeight: 27,
+    textAlign: 'center',
+  },
+  captureTopBar: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingBottom: 10,
+    paddingHorizontal: 18,
+  },
+  cameraPermissionPrompt: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    gap: 7,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  cameraPermissionText: {
+    color: 'rgba(253,251,245,0.68)',
+    fontFamily: paperFonts.handBold,
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: 'center',
+  },
+  cameraPermissionTitle: {
+    color: paperColors.card,
+    fontFamily: paperFonts.handBold,
+    fontSize: 17,
+    lineHeight: 22,
+  },
+  closeIconButton: {
+    alignItems: 'center',
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
+  closeTextButton: {
+    alignItems: 'flex-end',
+    minWidth: 44,
+    paddingVertical: 6,
+  },
+  closeTextButtonText: {
+    color: paperColors.ink1,
+    fontFamily: paperFonts.handBold,
+    fontSize: 13,
+    lineHeight: 17,
+  },
+  controlLabel: {
+    color: paperColors.ink1,
+    fontFamily: paperFonts.handBold,
+    fontSize: 10,
+    letterSpacing: 0.6,
+    lineHeight: 14,
+    marginTop: 3,
+    textTransform: 'uppercase',
+  },
+  controlSpacer: {
+    height: 46,
+    width: 46,
+  },
+  directoryErrorCard: {
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink2,
+    borderRadius: 12,
+    borderStyle: 'dashed',
+    borderWidth: 1.3,
+    gap: 10,
+    padding: 12,
+    width: '100%',
+  },
+  directoryErrorText: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  disabledButton: {
+    opacity: 0.45,
+  },
+  editAgainButton: {
+    alignSelf: 'center',
+    marginTop: 12,
+    padding: 8,
+  },
+  editAgainButtonText: {
+    color: paperColors.ink1,
+    fontFamily: paperFonts.handBold,
+    fontSize: 13,
+    lineHeight: 17,
+    textDecorationLine: 'underline',
+  },
+  emptyTagText: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  errorBody: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  errorLog: {
+    backgroundColor: paperColors.paper1,
+    borderColor: paperColors.ink3,
+    borderRadius: 8,
+    borderWidth: 1,
+    color: paperColors.ink2,
+    fontFamily: 'monospace',
+    fontSize: 11,
+    lineHeight: 15,
+    padding: 10,
+  },
+  errorMeta: {
+    color: paperColors.ink3,
+    fontFamily: paperFonts.handBold,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  errorTitle: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  errorTitleRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  focusBox: {
+    borderColor: 'rgba(253,251,245,0.5)',
+    borderWidth: 1.2,
+    height: 70,
+    left: '50%',
+    marginLeft: -35,
+    marginTop: -35,
+    position: 'absolute',
+    top: '50%',
+    width: 70,
+  },
+  focusCorner: {
+    height: 10,
+    position: 'absolute',
+    width: 10,
+  },
+  focusCornerBottomLeft: {
+    borderBottomColor: paperColors.card,
+    borderBottomWidth: 2,
+    borderLeftColor: paperColors.card,
+    borderLeftWidth: 2,
+    bottom: -4,
+    left: -4,
+  },
+  focusCornerBottomRight: {
+    borderBottomColor: paperColors.card,
+    borderBottomWidth: 2,
+    borderRightColor: paperColors.card,
+    borderRightWidth: 2,
+    bottom: -4,
+    right: -4,
+  },
+  focusCornerTopLeft: {
+    borderLeftColor: paperColors.card,
+    borderLeftWidth: 2,
+    borderTopColor: paperColors.card,
+    borderTopWidth: 2,
+    left: -4,
+    top: -4,
+  },
+  focusCornerTopRight: {
+    borderRightColor: paperColors.card,
+    borderRightWidth: 2,
+    borderTopColor: paperColors.card,
+    borderTopWidth: 2,
+    right: -4,
+    top: -4,
+  },
+  galleryButton: {
+    alignItems: 'center',
+  },
+  galleryThumb: {
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 10,
+    borderWidth: 1.6,
+    height: 46,
+    overflow: 'hidden',
+    padding: 4,
+    width: 46,
+  },
+  galleryThumbInner: {
+    backgroundColor: paperColors.paper2,
+    flex: 1,
+  },
+  inlineStatus: {
+    alignItems: 'center',
+    flexDirection: 'row',
     gap: 10,
     width: '100%',
   },
-  personalTagCreator: {
-    gap: 10,
+  inlineStatusText: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 13,
+    lineHeight: 18,
   },
-  personalTagInputRow: {
+  inputEyebrow: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 10,
+    letterSpacing: 1,
+    lineHeight: 14,
+    marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  mutedText: {
+    color: paperColors.ink3,
+  },
+  newTagButton: {
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderStyle: 'dashed',
+    borderWidth: 1.3,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  newTagButtonText: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  newTagCreateButton: {
+    backgroundColor: paperColors.ink0,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  newTagCreateText: {
+    color: paperColors.card,
+    fontFamily: paperFonts.handBold,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  newTagInput: {
+    color: paperColors.ink0,
+    flex: 1,
+    fontFamily: paperFonts.handBold,
+    fontSize: 14,
+    lineHeight: 19,
+    minWidth: 120,
+    paddingVertical: 4,
+  },
+  newTagRow: {
+    alignItems: 'center',
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 10,
+    padding: 8,
+  },
+  optionalText: {
+    color: paperColors.ink3,
+    fontFamily: paperFonts.handBold,
+    fontSize: 11,
+  },
+  paperButton: {
+    alignItems: 'center',
+    backgroundColor: paperColors.ink0,
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    justifyContent: 'center',
+    minHeight: 46,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    shadowColor: '#0A0908',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 1,
+    shadowRadius: 0,
+    elevation: 2,
+  },
+  paperButtonCoral: {
+    backgroundColor: paperColors.coral,
+  },
+  paperButtonLight: {
+    backgroundColor: paperColors.card,
+    shadowOpacity: 0,
+  },
+  paperButtonText: {
+    color: paperColors.card,
+    fontFamily: paperFonts.handBold,
+    fontSize: 14,
+    lineHeight: 18,
+  },
+  paperButtonTextDark: {
+    color: paperColors.ink0,
+  },
+  paperScreen: {
+    backgroundColor: paperColors.paper0,
+    flex: 1,
+  },
+  permissionActions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
-  },
-  personalTagInput: {
-    borderRadius: 18,
-    borderWidth: 1,
-    flex: 1,
-    fontSize: 15,
-    minWidth: 150,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  personalTagButton: {
-    minWidth: 132,
-  },
-  tagChip: {
-    borderRadius: 20,
-    borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    gap: 2,
-  },
-  tagLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  tagMeta: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  emptyStateText: {
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  errorMetaList: {
-    gap: 4,
-  },
-  errorLogBox: {
-    borderRadius: 14,
-    borderWidth: 1,
-    padding: 12,
     gap: 8,
   },
-  errorLogTitle: {
-    fontSize: 13,
-    fontWeight: '800',
+  permissionCard: {
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 12,
+    borderWidth: 1.3,
+    gap: 7,
+    padding: 12,
   },
-  errorLogText: {
-    fontFamily: 'monospace',
+  permissionNotes: {
+    gap: 8,
+    paddingHorizontal: 18,
+  },
+  permissionText: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
     fontSize: 12,
     lineHeight: 17,
   },
-  targetList: {
-    gap: 10,
+  permissionTitle: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 14,
+    lineHeight: 18,
   },
-  targetCard: {
-    borderRadius: 18,
-    borderWidth: 1,
-    padding: 14,
-    gap: 10,
+  previewPolaroid: {
+    backgroundColor: paperColors.card,
+    padding: 8,
+    paddingBottom: 8,
+    position: 'relative',
+    transform: [{ rotate: '-1.8deg' }],
+    ...paperShadow,
   },
-  targetHeader: {
-    gap: 4,
+  previewPolaroidWrap: {
+    alignItems: 'center',
+    marginBottom: 18,
   },
-  targetTitle: {
-    fontSize: 15,
-    fontWeight: '700',
+  privateOnlyCard: {
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink2,
+    borderRadius: 12,
+    borderStyle: 'dashed',
+    borderWidth: 1.3,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
-  targetSubtitle: {
+  privateOnlyText: {
+    color: paperColors.ink1,
+    fontFamily: paperFonts.handBold,
     fontSize: 13,
-    fontWeight: '600',
+    lineHeight: 18,
   },
-  selectedTagBadge: {
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+  replaceButton: {
+    alignItems: 'flex-end',
+    minWidth: 52,
+    paddingVertical: 6,
   },
-  selectedTagText: {
+  replaceButtonText: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
     fontSize: 12,
-    fontWeight: '700',
+    lineHeight: 16,
   },
-  debugHeader: {
+  scanLines: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255,255,255,0.015)',
+  },
+  sectionEyebrow: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 11,
+    letterSpacing: 1,
+    lineHeight: 15,
+    textTransform: 'uppercase',
+  },
+  selectedTag: {
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 1.3,
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 11,
+    lineHeight: 15,
+    overflow: 'hidden',
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+  },
+  selectedTagRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    justifyContent: 'center',
+    marginTop: 18,
+  },
+  shutterButton: {
+    alignItems: 'center',
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 2.5,
+    height: 82,
+    justifyContent: 'center',
+    padding: 5,
+    shadowColor: paperColors.ink0,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 1,
+    shadowRadius: 0,
+    width: 82,
+  },
+  shutterInner: {
+    alignItems: 'center',
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    flex: 1,
+    justifyContent: 'center',
+    width: '100%',
+  },
+  stepBackButton: {
+    alignItems: 'center',
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  stepTitle: {
+    color: paperColors.ink0,
+    flex: 1,
+    fontFamily: paperFonts.handBold,
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  stepTopBar: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    paddingBottom: 8,
+    paddingHorizontal: 18,
+  },
+  stickyCta: {
+    backgroundColor: 'rgba(251,247,240,0.94)',
+    bottom: 0,
+    left: 0,
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    position: 'absolute',
+    right: 0,
+  },
+  strong: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+  },
+  successContent: {
     alignItems: 'center',
     gap: 12,
+    paddingHorizontal: 24,
   },
-  debugCopy: {
-    flex: 1,
+  successCloseButton: {
+    alignItems: 'center',
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  successMeta: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  successPolaroid: {
+    backgroundColor: paperColors.card,
+    padding: 12,
+    paddingBottom: 12,
+    position: 'relative',
+    transform: [{ rotate: '-1.2deg' }],
+    width: '100%',
+    ...paperShadow,
+  },
+  successStamp: {
+    borderColor: paperColors.coral,
+    borderRadius: 999,
+    borderStyle: 'dashed',
+    borderWidth: 2,
+    color: paperColors.coral,
+    fontFamily: paperFonts.pen,
+    fontSize: 34,
+    lineHeight: 42,
+    overflow: 'hidden',
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    transform: [{ rotate: '-10deg' }],
+  },
+  successText: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  successTitle: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 24,
+    lineHeight: 30,
+    textAlign: 'center',
+  },
+  successTopBar: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 18,
+  },
+  tagChip: {
+    alignItems: 'center',
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 1.3,
+    flexDirection: 'row',
     gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  tagChipActive: {
+    shadowColor: paperColors.ink0,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
+    shadowRadius: 0,
+    elevation: 2,
+  },
+  tagChipLabel: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 13,
+    lineHeight: 17,
+  },
+  tagChipPrivate: {
+    borderColor: paperColors.ink2,
+    borderStyle: 'dashed',
+  },
+  tagChipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  tagHeaderRow: {
+    alignItems: 'baseline',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  tagScrollContent: {
+    paddingHorizontal: 18,
+  },
+  targetAvatar: {
+    alignItems: 'center',
+    borderColor: paperColors.ink0,
+    borderRadius: 8,
+    borderWidth: 1.3,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  targetAvatarText: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.pen,
+    fontSize: 18,
+    lineHeight: 22,
+  },
+  targetCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  targetMeta: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: 1,
+  },
+  targetName: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 13,
+    lineHeight: 17,
+  },
+  targetNameOff: {
+    textDecorationLine: 'line-through',
+  },
+  targetRow: {
+    alignItems: 'center',
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  targetRowOff: {
+    opacity: 0.5,
+  },
+  targetSwitch: {
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 1.3,
+    height: 24,
+    justifyContent: 'center',
+    paddingHorizontal: 2,
+    width: 42,
+  },
+  targetSwitchKnob: {
+    backgroundColor: paperColors.ink0,
+    borderRadius: 999,
+    height: 18,
+    width: 18,
+  },
+  targetSwitchKnobOn: {
+    alignSelf: 'flex-end',
+    backgroundColor: paperColors.card,
+  },
+  targetSwitchOn: {
+    backgroundColor: paperColors.ink0,
+  },
+  topPlaceholder: {
+    width: 32,
+  },
+  uploadErrorCard: {
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    gap: 8,
+    marginTop: 16,
+    padding: 14,
+  },
+  uploadSummary: {
+    borderColor: paperColors.ink2,
+    borderRadius: 12,
+    borderStyle: 'dashed',
+    borderWidth: 1.3,
+    gap: 4,
+    marginTop: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  uploadSummaryText: {
+    color: paperColors.ink1,
+    fontFamily: paperFonts.handBold,
+    fontSize: 12,
+    lineHeight: 19,
+  },
+  uploadSummaryTitle: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  uploadingCard: {
+    alignItems: 'center',
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 14,
+    borderWidth: 1.4,
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+    padding: 14,
+  },
+  uploadingCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  uploadingText: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  uploadingTitle: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  viewfinderBusy: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    backgroundColor: 'rgba(27,26,23,0.45)',
+    gap: 8,
+    justifyContent: 'center',
+  },
+  viewfinderBusyText: {
+    color: paperColors.card,
+    fontFamily: paperFonts.handBold,
+    fontSize: 13,
+    lineHeight: 17,
+  },
+  viewfinderCaption: {
+    bottom: 14,
+    color: paperColors.ink1,
+    fontFamily: paperFonts.pen,
+    fontSize: 20,
+    left: 0,
+    lineHeight: 25,
+    position: 'absolute',
+    right: 0,
+    textAlign: 'center',
+  },
+  viewfinderCenter: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+  },
+  viewfinderPolaroid: {
+    backgroundColor: paperColors.card,
+    borderColor: 'rgba(0,0,0,0.04)',
+    borderWidth: 1,
+    padding: 14,
+    paddingBottom: 56,
+    position: 'relative',
+    transform: [{ rotate: '-1.2deg' }],
+    ...paperShadow,
+  },
+  viewfinderSquare: {
+    backgroundColor: '#1E1A15',
+    height: 260,
+    overflow: 'hidden',
+    position: 'relative',
+    width: 260,
   },
 });

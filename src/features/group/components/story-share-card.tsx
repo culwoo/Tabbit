@@ -1,7 +1,15 @@
-import { ImageBackground, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
-import { colors, radius, spacing, typography } from '@/constants/tokens';
-import { formatLifeDayLabel, formatTimestampLabel } from '@/lib/life-day';
+import {
+  Bunny,
+  Polaroid,
+  Scribble,
+  Tape,
+  paperColors,
+  paperFonts,
+  toneFromIndex,
+} from '@/components/ui/paper-design';
+import { formatLifeDayLabel } from '@/lib/life-day';
 
 import type { GroupRow } from '@/lib/supabase';
 import type { GroupMemberWithCert, GroupTagEntry } from '../hooks/use-group-detail';
@@ -12,329 +20,289 @@ type StoryShareCardProps = {
   width: number;
 };
 
-function chunkMembers(members: GroupMemberWithCert[], columns: number) {
-  const rows: GroupMemberWithCert[][] = [];
-
-  for (let index = 0; index < members.length; index += columns) {
-    rows.push(members.slice(index, index + columns));
-  }
-
-  return rows;
+function getDisplayName(member: GroupMemberWithCert) {
+  return member.displayName.trim() || member.handle || 'member';
 }
 
-function getColumnCount(memberCount: number) {
-  if (memberCount <= 4) {
-    return 2;
+function getSignature(members: GroupMemberWithCert[]) {
+  const names = members.slice(0, 4).map(getDisplayName);
+
+  if (members.length > 4) {
+    return `${names.join(', ')} +${members.length - 4}`;
   }
 
-  if (memberCount <= 9) {
-    return 3;
-  }
-
-  return 4;
-}
-
-function getInitials(displayName: string) {
-  const trimmedName = displayName.trim();
-
-  if (!trimmedName) {
-    return '?';
-  }
-
-  return trimmedName.slice(0, 2);
+  return names.join(', ');
 }
 
 export function StoryShareCard({ group, tagEntry, width }: StoryShareCardProps) {
   const height = width * (16 / 9);
-  const columns = getColumnCount(tagEntry.members.length);
-  const rows = chunkMembers(tagEntry.members, columns);
-  const completionCopy =
-    tagEntry.thresholdState.status === 'expired'
-      ? '오전 5시 마감 후 고정된 팀 기록'
-      : '오전 5시 전까지 현재 화면이 계속 반영돼요';
+  const scale = width / 360;
+  const borderInset = 15 * scale;
+  const members = tagEntry.members.slice(0, 4);
+  const certifiedCount = tagEntry.members.filter((member) => member.isCertified).length;
+  const polaroidW = 124 * scale;
+  const photoH = 108 * scale;
+  const titleFont = 50 * scale;
+
+  const positions = [
+    { left: 32 * scale, top: height * 0.42, tilt: -5, tape: -6 },
+    { right: 28 * scale, top: height * 0.405, tilt: 4, tape: 8 },
+    { left: 58 * scale, top: height * 0.62, tilt: -2, tape: 4 },
+    { right: 46 * scale, top: height * 0.63, tilt: 6, tape: -8 },
+  ];
 
   return (
-    <View style={[styles.frame, { width, height }]}>
-      <View style={[styles.paperBand, styles.paperBandTop]} />
-      <View style={[styles.paperBand, styles.paperBandBottom]} />
+    <View style={[styles.frame, { height, width }]}>
+      <View style={styles.paperWashA} />
+      <View style={styles.paperWashB} />
+      <View
+        pointerEvents="none"
+        style={[
+          styles.outerBorder,
+          {
+            borderRadius: 12 * scale,
+            inset: borderInset,
+          },
+        ]}
+      />
+      <View
+        pointerEvents="none"
+        style={[
+          styles.innerBorder,
+          {
+            borderRadius: 8 * scale,
+            inset: borderInset + 6 * scale,
+          },
+        ]}
+      />
 
-      <View style={styles.header}>
-        <View style={styles.brandPill}>
-          <Text style={styles.brandPillText}>Tabbit</Text>
+      <View style={[styles.header, { paddingHorizontal: 34 * scale, paddingTop: 38 * scale }]}>
+        <View style={styles.brandRow}>
+          <Bunny size={28 * scale} />
+          <Text style={[styles.brand, { fontSize: 28 * scale, lineHeight: 32 * scale }]}>
+            tabbit
+          </Text>
         </View>
-        <Text style={styles.lifeDay}>{formatLifeDayLabel(tagEntry.lifeDay)}</Text>
-      </View>
-
-      <View style={styles.titleBlock}>
-        <Text numberOfLines={2} style={styles.title}>
-          {group.name} {tagEntry.tagLabel} 완료
-        </Text>
-        <Text numberOfLines={2} style={styles.subtitle}>
-          {completionCopy}
+        <Text style={[styles.date, { fontSize: 18 * scale, lineHeight: 23 * scale }]}>
+          {formatLifeDayLabel(tagEntry.lifeDay)}
         </Text>
       </View>
+      <View style={[styles.headerLine, { left: 34 * scale, right: 34 * scale, top: 80 * scale }]} />
 
-      <View style={styles.progressPanel}>
-        <View>
-          <Text style={styles.progressLabel}>TEAM PROGRESS</Text>
-          <Text style={styles.progressValue}>{tagEntry.shareProgressLabel}</Text>
+      <View style={[styles.titleBlock, { paddingHorizontal: 34 * scale, top: 92 * scale }]}>
+        <Text style={[styles.warmLead, { fontSize: 28 * scale, lineHeight: 32 * scale }]}>
+          오늘 우리,
+        </Text>
+        <View style={styles.titleWrap}>
+          <Text style={[styles.title, { fontSize: titleFont, lineHeight: titleFont * 1.02 }]}>
+            함께 갓생
+          </Text>
+          <Scribble style={styles.titleScribble} width={230 * scale} />
         </View>
-        <Text style={styles.progressTime}>
-          {formatTimestampLabel('unlocked_at' in tagEntry.thresholdState ? (tagEntry.thresholdState.finalized_at ?? tagEntry.thresholdState.unlocked_at ?? undefined) : undefined)}
+        <Text
+          numberOfLines={2}
+          style={[
+            styles.handNote,
+            {
+              fontSize: 24 * scale,
+              lineHeight: 29 * scale,
+              marginTop: 14 * scale,
+            },
+          ]}>
+          {group.name}의 진짜 기록이야
         </Text>
       </View>
 
-      <View style={styles.mosaic}>
-        {rows.map((row, rowIndex) => (
-          <View key={`row-${rowIndex}`} style={styles.mosaicRow}>
-            {row.map((member, memberIndex) => {
-              const panelStyle = [
-                styles.memberPanel,
+      <View style={styles.collageLayer}>
+        {members.map((member, index) => {
+          const position = positions[index];
+
+          return (
+            <View
+              key={member.memberId}
+              style={[
+                styles.memberPolaroid,
                 {
-                  backgroundColor: colors.surface.secondary,
-                  opacity: member.isCertified ? 1 : 0.58,
+                  left: position.left,
+                  right: position.right,
+                  top: position.top,
+                  transform: [{ rotate: `${position.tilt}deg` }],
                 },
-              ];
-              const panelContent = (
-                <>
-                  <View style={styles.memberPanelTop}>
-                    <View style={styles.memberInitials}>
-                      <Text style={styles.memberInitialsText}>{getInitials(member.displayName)}</Text>
-                    </View>
-                    <View style={styles.memberStatePill}>
-                      <Text style={styles.memberStateText}>{member.isCertified ? 'done' : 'wait'}</Text>
-                    </View>
-                  </View>
-                  <View style={styles.memberPanelBottom}>
-                    <Text numberOfLines={1} style={styles.memberName}>
-                      {member.displayName}
-                    </Text>
-                    <Text numberOfLines={2} style={styles.memberCaption}>
-                      {member.isCertified ? member.caption || '인증 완료' : '인증 대기 중'}
-                    </Text>
-                  </View>
-                </>
-              );
-
-              return member.imageUrl ? (
-                <ImageBackground
-                  imageStyle={styles.memberPanelImage}
-                  key={`${member.memberId}-${rowIndex}-${memberIndex}`}
-                  source={{ uri: member.imageUrl }}
-                  style={panelStyle}>
-                  {panelContent}
-                </ImageBackground>
-              ) : (
-                <View key={`${member.memberId}-${rowIndex}-${memberIndex}`} style={panelStyle}>
-                  {panelContent}
-                </View>
-              );
-            })}
-            {row.length < columns
-              ? Array.from({ length: columns - row.length }).map((_, index) => (
-                  <View key={`spacer-${rowIndex}-${index}`} style={styles.memberSpacer} />
-                ))
-              : null}
-          </View>
-        ))}
+              ]}>
+              <Tape
+                angle={position.tape}
+                left={30 * scale}
+                top={-8 * scale}
+                width={42 * scale}
+              />
+              <Polaroid
+                caption={getDisplayName(member)}
+                handNote={member.isCertified && index === 0 ? '찰칵' : null}
+                photoHeight={photoH}
+                tone={toneFromIndex(index + 1)}
+                uri={member.imageUrl}
+                width={polaroidW}
+              />
+            </View>
+          );
+        })}
       </View>
 
-      <View style={styles.footer}>
-        <Text style={styles.footerCaption}>today, together, softly</Text>
-        <Text style={styles.footerBrand}>Tabbit</Text>
+      <View
+        style={[
+          styles.footer,
+          {
+            bottom: 34 * scale,
+            left: 34 * scale,
+            right: 34 * scale,
+          },
+        ]}>
+        <Text
+          numberOfLines={2}
+          style={[
+            styles.signature,
+            {
+              fontSize: 23 * scale,
+              lineHeight: 27 * scale,
+              maxWidth: width * 0.62,
+            },
+          ]}>
+          by {getSignature(tagEntry.members)}
+        </Text>
+        <View style={styles.footerMeta}>
+          <Text style={[styles.streak, { fontSize: 22 * scale, lineHeight: 24 * scale }]}>
+            {certifiedCount}/{tagEntry.members.length}
+          </Text>
+          <Text style={[styles.footerBrand, { fontSize: 10 * scale, lineHeight: 12 * scale }]}>
+            TABBIT
+          </Text>
+        </View>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  frame: {
-    backgroundColor: colors.bg.warm,
-    borderColor: colors.line.warm,
-    borderRadius: radius.sheet,
-    borderWidth: 1,
-    gap: spacing.md,
-    overflow: 'hidden',
-    padding: spacing.lg,
+  brand: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.pen,
   },
-  paperBand: {
+  brandRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 7,
+  },
+  collageLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 2,
+  },
+  date: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.pen,
+  },
+  footer: {
+    alignItems: 'flex-end',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     position: 'absolute',
-    height: 84,
-    left: -30,
-    right: -30,
-    transform: [{ rotate: '-7deg' }],
+    zIndex: 4,
   },
-  paperBandTop: {
-    top: 42,
-    backgroundColor: colors.brand.blushSoft,
+  footerBrand: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontWeight: '700',
+    letterSpacing: 2,
+    marginTop: 3,
   },
-  paperBandBottom: {
-    bottom: 96,
-    backgroundColor: colors.brand.secondarySoft,
-    transform: [{ rotate: '6deg' }],
+  footerMeta: {
+    alignItems: 'flex-end',
+  },
+  frame: {
+    backgroundColor: paperColors.paper0,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  handNote: {
+    color: paperColors.coral,
+    fontFamily: paperFonts.pen,
+    transform: [{ rotate: '-1deg' }],
   },
   header: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
+    position: 'relative',
+    zIndex: 5,
+  },
+  headerLine: {
+    backgroundColor: paperColors.ink0,
+    height: 1.5,
+    opacity: 0.15,
+    position: 'absolute',
     zIndex: 1,
   },
-  brandPill: {
-    backgroundColor: colors.surface.inverse,
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
+  innerBorder: {
+    borderColor: paperColors.ink2,
+    borderStyle: 'dashed',
+    borderWidth: 1,
+    opacity: 0.72,
+    position: 'absolute',
   },
-  brandPillText: {
-    color: colors.text.inverse,
-    fontSize: 12,
-    fontWeight: '900',
-    letterSpacing: 0,
-    textTransform: 'uppercase',
+  memberPolaroid: {
+    position: 'absolute',
   },
-  lifeDay: {
-    color: colors.text.secondary,
-    fontSize: 12,
-    fontWeight: typography.label.fontWeight,
+  outerBorder: {
+    borderColor: paperColors.ink0,
+    borderWidth: 1.5,
+    position: 'absolute',
   },
-  titleBlock: {
-    gap: spacing.xs,
-    zIndex: 1,
+  paperWashA: {
+    backgroundColor: 'rgba(180,160,120,0.08)',
+    borderRadius: 999,
+    height: 240,
+    left: -70,
+    position: 'absolute',
+    top: 130,
+    width: 240,
+  },
+  paperWashB: {
+    backgroundColor: 'rgba(140,120,90,0.06)',
+    borderRadius: 999,
+    bottom: 70,
+    height: 280,
+    position: 'absolute',
+    right: -90,
+    width: 280,
+  },
+  signature: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.pen,
+    transform: [{ rotate: '-2deg' }],
+  },
+  streak: {
+    color: paperColors.coral,
+    fontFamily: paperFonts.pen,
   },
   title: {
-    color: colors.text.primary,
-    fontSize: 32,
-    fontWeight: '900',
-    letterSpacing: 0,
-    lineHeight: 37,
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    letterSpacing: -1,
   },
-  subtitle: {
-    color: colors.text.secondary,
-    fontSize: 14,
-    fontWeight: typography.body.fontWeight,
-    lineHeight: 20,
+  titleBlock: {
+    position: 'absolute',
+    zIndex: 3,
   },
-  progressPanel: {
-    alignItems: 'center',
-    backgroundColor: colors.surface.raised,
-    borderColor: colors.line.soft,
-    borderRadius: radius.card - 8,
-    borderWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    zIndex: 1,
+  titleScribble: {
+    bottom: -4,
+    left: 0,
+    position: 'absolute',
   },
-  progressLabel: {
-    color: colors.text.tertiary,
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 0,
+  titleWrap: {
+    alignSelf: 'flex-start',
+    position: 'relative',
   },
-  progressValue: {
-    color: colors.text.primary,
-    fontSize: 20,
-    fontVariant: ['tabular-nums'],
-    fontWeight: '900',
-    lineHeight: 24,
-  },
-  progressTime: {
-    color: colors.text.secondary,
-    fontSize: 11,
-    fontWeight: typography.label.fontWeight,
-    maxWidth: 116,
-    textAlign: 'right',
-  },
-  mosaic: {
-    flex: 1,
-    gap: spacing.sm,
-    zIndex: 1,
-  },
-  mosaicRow: {
-    flex: 1,
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  memberPanel: {
-    borderColor: 'rgba(255, 255, 255, 0.78)',
-    borderRadius: radius.card - 10,
-    borderWidth: 1,
-    flex: 1,
-    justifyContent: 'space-between',
-    overflow: 'hidden',
-    padding: spacing.sm,
-  },
-  memberSpacer: {
-    flex: 1,
-  },
-  memberPanelTop: {
-    alignItems: 'flex-start',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  memberPanelImage: {
-    borderRadius: radius.card - 10,
-  },
-  memberInitials: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.82)',
-    borderRadius: radius.pill,
-    height: 30,
-    justifyContent: 'center',
-    minWidth: 30,
-    paddingHorizontal: spacing.xs,
-  },
-  memberInitialsText: {
-    color: colors.text.primary,
-    fontSize: 11,
-    fontWeight: '900',
-  },
-  memberStatePill: {
-    backgroundColor: 'rgba(255, 255, 255, 0.76)',
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.xs,
-    paddingVertical: spacing.xxs,
-  },
-  memberStateText: {
-    color: colors.text.primary,
-    fontSize: 9,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-  },
-  memberPanelBottom: {
-    backgroundColor: 'rgba(255, 255, 255, 0.78)',
-    borderRadius: radius.input,
-    gap: spacing.xxs,
-    padding: spacing.xs,
-  },
-  memberName: {
-    color: colors.text.primary,
-    fontSize: 15,
-    fontWeight: '900',
-    lineHeight: 18,
-  },
-  memberCaption: {
-    color: colors.text.secondary,
-    fontSize: 11,
-    fontWeight: typography.label.fontWeight,
-    lineHeight: 15,
-  },
-  footer: {
-    alignItems: 'baseline',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    zIndex: 1,
-  },
-  footerCaption: {
-    color: colors.text.tertiary,
-    fontSize: 12,
-    fontWeight: typography.label.fontWeight,
-  },
-  footerBrand: {
-    color: colors.text.primary,
-    fontSize: 18,
-    fontWeight: '900',
-    letterSpacing: 0,
+  warmLead: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.pen,
   },
 });

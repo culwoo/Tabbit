@@ -1,4 +1,5 @@
 import { requireSupabase } from './client';
+import { resolveLifestyleDate } from '@/lib/domain';
 import type { GroupRow, GroupMemberRow, GroupTagRow, PersonalTagRow } from './database-types';
 
 const db = () => requireSupabase();
@@ -215,6 +216,46 @@ export async function createGroup(params: {
   return data as GroupRow;
 }
 
+// ── 그룹 인증 기준 변경 ──
+
+export async function updateGroupThresholdRule(
+  groupId: string,
+  thresholdRule: GroupRow['threshold_rule'],
+) {
+  const memberCounts = await fetchActiveGroupMemberCounts([groupId]);
+  const activeMemberCount = memberCounts.get(groupId) ?? 0;
+  const nextRule: GroupRow['threshold_rule'] = activeMemberCount <= 2 ? 'ALL' : thresholdRule;
+
+  const { data, error } = await db()
+    .from('groups')
+    .update({ threshold_rule: nextRule })
+    .eq('id', groupId)
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  const tags = await fetchGroupTags(groupId);
+  const lifestyleDate = resolveLifestyleDate(new Date());
+
+  await Promise.all(
+    tags.map(async (tag) => {
+      const { error: recalculateError } = await db().rpc(
+        'recalculate_threshold_state_for_current_active_members',
+        {
+          target_group_id: groupId,
+          target_group_tag_id: tag.id,
+          target_lifestyle_date: lifestyleDate,
+        },
+      );
+
+      if (recalculateError) throw recalculateError;
+    }),
+  );
+
+  return data as GroupRow;
+}
+
 // ── 초대 코드로 그룹 참여 ──
 
 export async function joinGroupByInviteCode(inviteCode: string, userId: string) {
@@ -303,11 +344,13 @@ export async function addGroupTag(groupId: string, label: string, syncToPersonal
 // ── 그룹 태그 삭제 ──
 
 export async function deleteGroupTag(groupId: string, groupTagId: string) {
-  const { error } = await db()
+  const { data, error } = await db()
     .from('group_tags')
     .delete()
     .eq('group_id', groupId)
-    .eq('id', groupTagId);
+    .eq('id', groupTagId)
+    .select('id')
+    .maybeSingle();
 
   if (error) {
     if (/foreign key|violates/i.test(error.message)) {
@@ -315,6 +358,10 @@ export async function deleteGroupTag(groupId: string, groupTagId: string) {
     }
 
     throw error;
+  }
+
+  if (!data) {
+    throw new Error('이미 삭제되었거나 찾을 수 없는 태그입니다.');
   }
 }
 

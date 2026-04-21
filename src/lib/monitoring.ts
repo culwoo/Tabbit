@@ -17,6 +17,7 @@ export type AnalyticsEventName =
   | 'share_export_succeeded'
   | 'share_export_failed'
   | 'share_sheet_opened'
+  | 'snapshot_save_failed'
   | 'snapshot_saved';
 
 function logPrefix(channel: 'analytics' | 'errors') {

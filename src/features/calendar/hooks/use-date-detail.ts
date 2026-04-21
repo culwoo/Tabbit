@@ -4,16 +4,32 @@ import { useFocusEffect } from 'expo-router';
 
 import {
   fetchCertificationsByGroupTag,
-  fetchMyGroups,
   fetchGroupTags,
   fetchGroupThresholdStates,
+  fetchMyGroups,
   fetchMyPersonalCertificationRecords,
   fetchStoryCard,
-  type ThresholdStateRow,
+  type CertificationRow,
   type StoryCardRow,
+  type ThresholdStateRow,
 } from '@/lib/supabase';
 import { resolveLifestyleDate } from '@/lib/domain';
 import { useAppSession } from '@/providers/app-session-provider';
+
+type CertificationWithUser = CertificationRow & {
+  users?: {
+    display_name?: string | null;
+    id?: string | null;
+  } | null;
+};
+
+export type GroupCalendarCertification = {
+  id: string;
+  caption: string;
+  contributorName: string;
+  imageUrl?: string;
+  uploadedAt: string;
+};
 
 export type DateDetailGroupEntry = {
   groupId: string;
@@ -29,6 +45,7 @@ export type DateDetailGroupEntry = {
   subtitle: string;
   shareEnabled: boolean;
   snapshot?: StoryCardRow;
+  records: GroupCalendarCertification[];
 };
 
 export type PersonalCalendarRecord = {
@@ -40,6 +57,11 @@ export type PersonalCalendarRecord = {
   uploadedAt: string;
   tagLabels: string[];
 };
+
+function readCertification(row: unknown) {
+  const maybeRow = row as { certifications?: CertificationWithUser | null };
+  return maybeRow.certifications ?? null;
+}
 
 export function useDateDetail(date: string) {
   const { userId } = useAppSession();
@@ -70,22 +92,33 @@ export function useDateDetail(date: string) {
         ]);
 
         for (const tag of tags) {
-          const threshold = thresholds.find(t => t.group_tag_id === tag.id);
+          const threshold = thresholds.find((state) => state.group_tag_id === tag.id);
           if (!threshold) {
             continue;
           }
 
-          const [storyCard, certifications] = await Promise.all([
+          const [storyCard, certificationRows] = await Promise.all([
             fetchStoryCard(group.id, tag.id, date),
             fetchCertificationsByGroupTag(group.id, tag.id, date),
           ]);
+          const records = certificationRows
+            .map(readCertification)
+            .filter((certification): certification is CertificationWithUser => Boolean(certification))
+            .map((certification) => ({
+              caption: certification.caption || '인증',
+              contributorName: certification.users?.display_name ?? '멤버',
+              id: certification.id,
+              imageUrl: certification.image_url,
+              uploadedAt: certification.uploaded_at,
+            }))
+            .sort((left, right) => right.uploadedAt.localeCompare(left.uploadedAt));
 
-          if (certifications.length === 0 && !storyCard) {
+          if (records.length === 0 && !storyCard) {
             continue;
           }
 
-          const thStatus = threshold?.status ?? 'locked';
-          const isUnlocked = thStatus === 'provisional_unlocked' || thStatus === 'finalized';
+          const status = threshold?.status ?? 'locked';
+          const isUnlocked = status === 'provisional_unlocked' || status === 'finalized';
 
           entries.push({
             groupId: group.id,
@@ -94,15 +127,20 @@ export function useDateDetail(date: string) {
             groupName: group.name,
             tagLabel: tag.label,
             thresholdState: threshold ?? { status: 'locked' },
-            shareProgressLabel: threshold ? `인증 ${threshold.certified_member_count}/${threshold.effective_threshold}명` : `인증 0/${group.member_limit}명`,
-            subtitle: isUnlocked ? '언락되었습니다. 그룹 스토리를 공유해보세요.' : '아직 그룹 스토리가 잠겨있습니다.',
+            shareProgressLabel: threshold
+              ? `인증 ${threshold.certified_member_count}/${threshold.effective_threshold}명`
+              : `인증 0/${group.member_limit}명`,
+            subtitle: isUnlocked
+              ? '열렸습니다. 그룹 스토리를 다시 확인할 수 있어요.'
+              : '아직 그룹 스토리가 잠겨 있습니다.',
             shareEnabled: isUnlocked,
             snapshot: storyCard ?? undefined,
+            records,
           });
         }
       }
 
-      setGroupEntries(entries.sort((a, b) => a.tagLabel.localeCompare(b.tagLabel)));
+      setGroupEntries(entries.sort((left, right) => left.tagLabel.localeCompare(right.tagLabel, 'ko')));
 
       setPersonalRecords(
         personalRecordRows.map((record) => {
@@ -119,7 +157,6 @@ export function useDateDetail(date: string) {
           };
         }),
       );
-
     } catch (err) {
       console.error('[useDateDetail] error:', err);
       setGroupEntries([]);
@@ -132,8 +169,8 @@ export function useDateDetail(date: string) {
 
   useFocusEffect(
     useCallback(() => {
-      loadData();
-    }, [loadData])
+      void loadData();
+    }, [loadData]),
   );
 
   return {

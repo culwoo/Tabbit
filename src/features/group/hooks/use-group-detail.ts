@@ -1,20 +1,20 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useFocusEffect } from 'expo-router';
 
-import { resolveLifestyleDate } from '@/lib/domain';
+import { resolveEffectiveThreshold, resolveLifestyleDate } from '@/lib/domain';
 import {
+  fetchCertificationsByGroupTag,
   fetchGroup,
   fetchGroupMembers,
   fetchGroupTags,
   fetchGroupThresholdStates,
-  fetchCertificationsByGroupTag,
   fetchStoryCard,
   subscribeToThresholdChanges,
-  type GroupRow,
   type GroupMemberRow,
-  type ThresholdStateRow,
+  type GroupRow,
   type StoryCardRow,
+  type ThresholdStateRow,
 } from '@/lib/supabase';
 
 export type GroupMemberWithCert = {
@@ -23,7 +23,6 @@ export type GroupMemberWithCert = {
   handle: string;
   avatarUrl: string | null;
   role: GroupMemberRow['role'];
-  // Certification
   isCertified: boolean;
   caption?: string;
   imageUrl?: string;
@@ -36,14 +35,58 @@ export type GroupTagEntry = {
   lifeDay: string;
   title: string;
   subtitle: string;
-
   thresholdState: ThresholdStateRow | { status: 'locked' };
-
   shareEnabled: boolean;
   shareProgressLabel: string;
-
   members: GroupMemberWithCert[];
 };
+
+function resolveRequiredCount({
+  certifiedCount,
+  group,
+  memberCount,
+  threshold,
+}: {
+  certifiedCount: number;
+  group: GroupRow;
+  memberCount: number;
+  threshold?: ThresholdStateRow | null;
+}) {
+  if (threshold?.effective_threshold && threshold.effective_threshold > 0) {
+    return threshold.effective_threshold;
+  }
+
+  const computed = resolveEffectiveThreshold(group.threshold_rule, memberCount);
+
+  if (computed > 0) {
+    return computed;
+  }
+
+  return certifiedCount > 0 ? Math.max(1, certifiedCount) : Math.max(1, memberCount);
+}
+
+function readUserFromMember(member: Awaited<ReturnType<typeof fetchGroupMembers>>[number]) {
+  return member.users as unknown as {
+    id: string;
+    display_name: string;
+    handle: string | null;
+    avatar_url: string | null;
+  };
+}
+
+function readCertificationFromShareTarget(
+  shareTarget: Awaited<ReturnType<typeof fetchCertificationsByGroupTag>>[number],
+) {
+  return shareTarget.certifications as
+    | {
+        user_id: string;
+        caption?: string;
+        image_url?: string;
+        uploaded_at?: string;
+      }
+    | null
+    | undefined;
+}
 
 export function useGroupDetail(groupId: string, requestedLifeDay?: string) {
   const [loading, setLoading] = useState(true);
@@ -51,6 +94,7 @@ export function useGroupDetail(groupId: string, requestedLifeDay?: string) {
   const [tagEntries, setTagEntries] = useState<GroupTagEntry[]>([]);
   const [snapshots, setSnapshots] = useState<Record<string, StoryCardRow>>({});
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const hasLoadedRef = useRef(false);
 
   const lifeDay = requestedLifeDay ?? resolveLifestyleDate(new Date());
 
@@ -65,7 +109,7 @@ export function useGroupDetail(groupId: string, requestedLifeDay?: string) {
     }
 
     try {
-      setLoading(true);
+      setLoading(!hasLoadedRef.current);
       setErrorMessage(null);
 
       const [groupData, groupMembers, groupTags, thresholds] = await Promise.all([
@@ -78,77 +122,86 @@ export function useGroupDetail(groupId: string, requestedLifeDay?: string) {
       setGroup(groupData);
 
       const entries: GroupTagEntry[] = [];
-      const snaps: Record<string, StoryCardRow> = {};
+      const nextSnapshots: Record<string, StoryCardRow> = {};
 
       for (const tag of groupTags) {
-        // Fetch matching threshold
-        const threshold = thresholds.find(t => t.group_tag_id === tag.id);
-
-        // Fetch certifications for this tag on this date
+        const threshold = thresholds.find((item) => item.group_tag_id === tag.id);
         const certs = await fetchCertificationsByGroupTag(groupId, tag.id, lifeDay);
 
-        // Map members + certs
-        const membersWithCerts: GroupMemberWithCert[] = groupMembers.map(m => {
-          const user = (m.users as any);
-          const certItem = certs.find(c => (c.certifications as any).user_id === user.id);
-          const cert = certItem?.certifications as any;
+        const membersWithCerts: GroupMemberWithCert[] = groupMembers.map((member) => {
+          const user = readUserFromMember(member);
+          const certItem = certs.find(
+            (item) => readCertificationFromShareTarget(item)?.user_id === user.id,
+          );
+          const cert = certItem ? readCertificationFromShareTarget(certItem) : null;
 
           return {
-            memberId: user.id,
+            avatarUrl: user.avatar_url,
+            caption: cert?.caption,
             displayName: user.display_name,
             handle: user.handle ?? '@user',
-            avatarUrl: user.avatar_url,
-            role: m.role,
-            isCertified: !!cert,
-            caption: cert?.caption,
             imageUrl: cert?.image_url,
+            isCertified: Boolean(cert),
+            memberId: user.id,
+            role: member.role,
             uploadedAt: cert?.uploaded_at,
           };
         });
 
-        const thStatus = threshold?.status ?? 'locked';
-        const isUnlocked = thStatus === 'provisional_unlocked' || thStatus === 'finalized';
+        const certCount = membersWithCerts.filter((member) => member.isCertified).length;
+        const requiredCount = resolveRequiredCount({
+          certifiedCount: certCount,
+          group: groupData,
+          memberCount: membersWithCerts.length,
+          threshold,
+        });
+        const thresholdStatus = threshold?.status ?? 'locked';
+        const isUnlockedByServer =
+          thresholdStatus === 'provisional_unlocked' || thresholdStatus === 'finalized';
+        const isUnlockedByCurrentCerts =
+          thresholdStatus !== 'expired' && requiredCount > 0 && certCount >= requiredCount;
+        const isUnlocked = isUnlockedByServer || isUnlockedByCurrentCerts;
 
-        const certCount = membersWithCerts.filter(m => m.isCertified).length;
-        const requiredCount = threshold?.effective_threshold ?? groupData.member_limit;
-
-        // Fetch Snapshot (StoryCard)
         const storyCard = await fetchStoryCard(groupId, tag.id, lifeDay);
         if (storyCard) {
-          snaps[tag.id] = storyCard;
+          nextSnapshots[tag.id] = storyCard;
         }
 
         entries.push({
-          tagId: tag.id,
-          tagLabel: tag.label,
           lifeDay,
-          title: tag.label,
-          subtitle: isUnlocked ? '언락되었습니다. 그룹 스토리를 공유해보세요.' : '아직 그룹 스토리가 잠겨있습니다.',
-          thresholdState: threshold ?? { status: 'locked' },
+          members: membersWithCerts,
           shareEnabled: isUnlocked,
           shareProgressLabel: `인증 ${certCount}/${requiredCount}명`,
-          members: membersWithCerts,
+          subtitle: isUnlocked
+            ? '열렸어요. 그룹 스토리를 공유해보세요.'
+            : '아직 그룹 스토리가 열리지 않았습니다.',
+          tagId: tag.id,
+          tagLabel: tag.label,
+          thresholdState: threshold ?? { status: 'locked' },
+          title: tag.label,
         });
       }
 
       setTagEntries(entries);
-      setSnapshots(snaps);
-
-    } catch (err) {
-      console.error('[useGroupDetail] Error:', err);
+      setSnapshots(nextSnapshots);
+    } catch (error) {
+      console.error('[useGroupDetail] Error:', error);
       setGroup(null);
       setTagEntries([]);
       setSnapshots({});
-      setErrorMessage(err instanceof Error ? err.message : '그룹 데이터를 불러오지 못했습니다.');
+      setErrorMessage(
+        error instanceof Error ? error.message : '그룹 데이터를 불러오지 못했습니다.',
+      );
     } finally {
+      hasLoadedRef.current = true;
       setLoading(false);
     }
   }, [groupId, lifeDay]);
 
   useFocusEffect(
     useCallback(() => {
-      loadData();
-    }, [loadData])
+      void loadData();
+    }, [loadData]),
   );
 
   useEffect(() => {
@@ -165,11 +218,11 @@ export function useGroupDetail(groupId: string, requestedLifeDay?: string) {
 
   return {
     errorMessage,
-    loading,
     group,
-    tagEntries,
-    snapshots,
     lifeDay,
+    loading,
     refresh: loadData,
+    snapshots,
+    tagEntries,
   };
 }

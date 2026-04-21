@@ -4,39 +4,47 @@ import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Pressable,
   RefreshControl,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { AppHeader } from '@/components/shell/app-header';
-import { colors, radius, spacing, typography } from '@/constants/tokens';
-import { useAppSession } from '@/providers/app-session-provider';
+import {
+  PaperAvatar,
+  Tape,
+  paperColors,
+  paperFonts,
+  paperShadow,
+  toneFromIndex,
+} from '@/components/ui/paper-design';
 import {
   fetchNotifications,
-  markNotificationRead,
   markAllNotificationsRead,
+  markNotificationRead,
   type NotificationRow,
 } from '@/lib/supabase';
+import { useAppSession } from '@/providers/app-session-provider';
+import { useFontPreference } from '@/providers/font-preference-provider';
 
-const ICON_MAP: Record<NotificationRow['type'], { name: keyof typeof Ionicons.glyphMap; color: string }> = {
-  new_certification: { name: 'camera', color: colors.brand.primary },
-  certification_comment: { name: 'chatbubble', color: colors.brand.accent },
-  group_invite: { name: 'people', color: colors.brand.secondary },
-  group_chat: { name: 'chatbubbles', color: colors.status.info },
-  threshold_unlocked: { name: 'lock-open', color: colors.status.success },
-  story_card_finalized: { name: 'sparkles', color: colors.brand.accent },
+const ICON_MAP: Record<NotificationRow['type'], keyof typeof Ionicons.glyphMap> = {
+  certification_comment: 'chatbubble-ellipses-outline',
+  group_chat: 'chatbubbles-outline',
+  group_invite: 'people-outline',
+  new_certification: 'camera-outline',
+  story_card_finalized: 'sparkles-outline',
+  threshold_unlocked: 'lock-open-outline',
 };
 
 const LABEL_MAP: Record<NotificationRow['type'], string> = {
-  new_certification: '새 인증',
   certification_comment: '댓글',
-  group_invite: '그룹 초대',
   group_chat: '새 채팅',
-  threshold_unlocked: '언락!',
-  story_card_finalized: '스토리 확정',
+  group_invite: '그룹 초대',
+  new_certification: '새 인증',
+  story_card_finalized: '스토리 저장',
+  threshold_unlocked: '스토리 열림',
 };
 
 function timeAgo(iso: string): string {
@@ -50,20 +58,30 @@ function timeAgo(iso: string): string {
   return `${days}일 전`;
 }
 
+function getPayloadText(item: NotificationRow) {
+  const payload = item.payload as Record<string, unknown>;
+  const body = payload.message ?? payload.body ?? payload.title;
+
+  return typeof body === 'string' ? body : LABEL_MAP[item.type] ?? '알림';
+}
+
 export default function NotificationsScreen() {
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const { userId } = useAppSession();
+  const { bodyTextStyle, strongTextStyle } = useFontPreference();
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const loadData = useCallback(async () => {
     if (!userId) return;
+
     try {
       const data = await fetchNotifications(userId, 50);
       setNotifications(data);
-    } catch (err) {
-      console.error('[Notifications] load error:', err);
+    } catch (error) {
+      console.error('[Notifications] load error:', error);
     } finally {
       setLoading(false);
     }
@@ -72,7 +90,7 @@ export default function NotificationsScreen() {
   useFocusEffect(
     useCallback(() => {
       setLoading(true);
-      loadData();
+      void loadData();
     }, [loadData]),
   );
 
@@ -84,13 +102,14 @@ export default function NotificationsScreen() {
 
   const handleReadAll = useCallback(async () => {
     if (!userId) return;
+
     try {
       await markAllNotificationsRead(userId);
-      setNotifications((prev) =>
-        prev.map((n) => (n.read_at ? n : { ...n, read_at: new Date().toISOString() })),
+      setNotifications((items) =>
+        items.map((item) => (item.read_at ? item : { ...item, read_at: new Date().toISOString() })),
       );
-    } catch (err) {
-      console.error('[Notifications] readAll error:', err);
+    } catch (error) {
+      console.error('[Notifications] readAll error:', error);
     }
   }, [userId]);
 
@@ -98,100 +117,116 @@ export default function NotificationsScreen() {
     if (!item.read_at) {
       try {
         await markNotificationRead(item.id);
-        setNotifications((prev) =>
-          prev.map((n) => (n.id === item.id ? { ...n, read_at: new Date().toISOString() } : n)),
+        setNotifications((items) =>
+          items.map((nextItem) =>
+            nextItem.id === item.id ? { ...nextItem, read_at: new Date().toISOString() } : nextItem,
+          ),
         );
-      } catch {}
+      } catch {
+        // 읽음 처리 실패가 이동을 막지는 않습니다.
+      }
     }
 
-    // 딥링크 라우팅
-    const payload = item.payload as Record<string, any>;
-    if (item.type === 'group_invite' && payload.groupId) {
-      router.push(`/groups/${payload.groupId}`);
-    } else if (item.type === 'group_chat' && payload.groupId) {
-      router.push(`/groups/chat/${payload.groupId}`);
-    } else if (payload.groupId) {
-      router.push(`/groups/${payload.groupId}`);
+    const payload = item.payload as Record<string, unknown>;
+    const groupId = typeof payload.groupId === 'string' ? payload.groupId : null;
+
+    if (item.type === 'group_chat' && groupId) {
+      router.push(`/groups/chat/${groupId}`);
+      return;
+    }
+
+    if (groupId) {
+      router.push(`/groups/${groupId}`);
     }
   }, []);
 
   function handleBack() {
     if (navigation.canGoBack()) {
       router.back();
-    } else {
-      router.replace('/');
+      return;
     }
+
+    router.replace('/');
   }
 
-  const unreadCount = notifications.filter((n) => !n.read_at).length;
+  const unreadCount = notifications.filter((item) => !item.read_at).length;
 
   const renderItem = useCallback(
-    ({ item }: { item: NotificationRow }) => {
-      const iconConfig = ICON_MAP[item.type] ?? { name: 'ellipse', color: colors.text.tertiary };
+    ({ item, index }: { item: NotificationRow; index: number }) => {
       const isUnread = !item.read_at;
-      const payload = item.payload as Record<string, any>;
-      const body = payload.message ?? payload.body ?? LABEL_MAP[item.type] ?? '알림';
+      const tone = toneFromIndex(index);
 
       return (
-        <TouchableOpacity
+        <Pressable
           accessibilityLabel={`${LABEL_MAP[item.type]} 알림`}
-          activeOpacity={0.7}
-          onPress={() => handleTap(item)}
-          style={[styles.notifRow, isUnread && styles.notifRowUnread]}
-        >
-          <View style={[styles.iconCircle, { backgroundColor: `${iconConfig.color}18` }]}>
-            <Ionicons color={iconConfig.color} name={iconConfig.name as any} size={18} />
+          accessibilityRole="button"
+          onPress={() => void handleTap(item)}
+          style={[
+            styles.notificationCard,
+            {
+              backgroundColor: isUnread ? paperColors[tone] : paperColors.card,
+              transform: [{ rotate: `${(index % 2 === 0 ? -1 : 1) * 0.4}deg` }],
+            },
+          ]}>
+          {index % 3 === 0 ? <Tape angle={-6} left={26} top={-10} width={58} /> : null}
+          <View style={styles.notificationIcon}>
+            <Ionicons color={paperColors.ink0} name={ICON_MAP[item.type]} size={18} />
           </View>
-          <View style={styles.notifContent}>
-            <View style={styles.notifTopRow}>
-              <Text style={styles.notifType}>{LABEL_MAP[item.type]}</Text>
-              {isUnread ? <View style={styles.unreadDot} /> : null}
+          <View style={styles.notificationCopy}>
+            <View style={styles.notificationTop}>
+              <Text style={[styles.notificationLabel, strongTextStyle]}>{LABEL_MAP[item.type]}</Text>
+              {isUnread ? <Text style={[styles.unreadMark, strongTextStyle]}>new</Text> : null}
             </View>
-            <Text numberOfLines={2} style={styles.notifBody}>{body as string}</Text>
-            <Text style={styles.notifTime}>{timeAgo(item.created_at)}</Text>
+            <Text numberOfLines={2} style={[styles.notificationBody, bodyTextStyle]}>
+              {getPayloadText(item)}
+            </Text>
+            <Text style={[styles.notificationTime, bodyTextStyle]}>{timeAgo(item.created_at)}</Text>
           </View>
-        </TouchableOpacity>
+        </Pressable>
       );
     },
-    [handleTap],
+    [bodyTextStyle, handleTap, strongTextStyle],
   );
 
   return (
     <View style={styles.screen}>
-      <AppHeader
-        onBack={handleBack}
-        rightActions={
-          unreadCount > 0
-            ? [{ accessibilityLabel: '모두 읽음', icon: 'checkmark-done', onPress: handleReadAll }]
-            : []
-        }
-        title="알림"
-        variant="detail"
-      />
+      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+        <Pressable accessibilityLabel="뒤로가기" onPress={handleBack} style={styles.iconButton}>
+          <Ionicons color={paperColors.ink0} name="chevron-back" size={24} />
+        </Pressable>
+        <Text style={styles.topTitle}>알림</Text>
+        {unreadCount > 0 ? (
+          <Pressable accessibilityLabel="모두 읽음" onPress={() => void handleReadAll()} style={styles.iconButton}>
+            <Ionicons color={paperColors.ink0} name="checkmark-done-outline" size={22} />
+          </Pressable>
+        ) : (
+          <View style={styles.iconButton} />
+        )}
+      </View>
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator color={colors.brand.primary} size="large" />
+          <ActivityIndicator color={paperColors.coral} size="large" />
+          <Text style={[styles.loadingText, bodyTextStyle]}>소식을 모으는 중</Text>
         </View>
       ) : notifications.length === 0 ? (
         <View style={styles.emptyBox}>
-          <Ionicons color={colors.text.tertiary} name="notifications-off-outline" size={48} />
-          <Text style={styles.emptyTitle}>조용한 하루예요</Text>
-          <Text style={styles.emptyDesc}>
-            인증, 채팅, 스토리 언락 소식이 생기면 여기에 모입니다.
-          </Text>
+          <Tape angle={-7} left={42} top={-8} width={72} />
+          <PaperAvatar label="쉿" size={58} tone="sage" />
+          <Text style={[styles.emptyTitle, strongTextStyle]}>조용한 하루예요</Text>
+          <Text style={[styles.emptyDesc, bodyTextStyle]}>인증, 채팅, 스토리 소식이 생기면 여기에 붙어요.</Text>
         </View>
       ) : (
         <FlatList
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 34 }]}
           data={notifications}
           keyExtractor={(item) => item.id}
           refreshControl={
             <RefreshControl
-              colors={[colors.brand.primary]}
+              colors={[paperColors.coral]}
               onRefresh={handleRefresh}
               refreshing={refreshing}
-              tintColor={colors.brand.primary}
+              tintColor={paperColors.coral}
             />
           }
           renderItem={renderItem}
@@ -203,96 +238,139 @@ export default function NotificationsScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    backgroundColor: colors.bg.canvas,
-    flex: 1,
-  },
   center: {
     alignItems: 'center',
     flex: 1,
+    gap: 10,
     justifyContent: 'center',
   },
-
-  // 빈 상태
   emptyBox: {
     alignItems: 'center',
-    flex: 1,
-    gap: spacing.sm,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.xxl,
-  },
-  emptyTitle: {
-    color: colors.text.primary,
-    fontSize: typography.title.fontSize,
-    fontWeight: typography.title.fontWeight,
+    alignSelf: 'center',
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    gap: 10,
+    marginHorizontal: 24,
+    marginTop: 80,
+    paddingHorizontal: 22,
+    paddingVertical: 24,
+    position: 'relative',
+    ...paperShadow,
   },
   emptyDesc: {
-    color: colors.text.secondary,
-    fontSize: typography.body.fontSize,
-    lineHeight: typography.body.lineHeight,
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 14,
+    lineHeight: 20,
     textAlign: 'center',
   },
-
-  // 리스트
-  list: {
-    gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.xxxl,
-    paddingTop: spacing.sm,
+  emptyTitle: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 22,
+    lineHeight: 27,
   },
-  notifRow: {
-    alignItems: 'flex-start',
-    backgroundColor: colors.surface.raised,
-    borderColor: colors.line.soft,
-    borderRadius: radius.card,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-  },
-  notifRowUnread: {
-    backgroundColor: colors.brand.butterSoft,
-    borderColor: colors.line.warm,
-  },
-  iconCircle: {
+  iconButton: {
     alignItems: 'center',
-    borderColor: colors.line.soft,
-    borderWidth: 1,
-    borderRadius: radius.pill,
-    height: 36,
+    height: 38,
     justifyContent: 'center',
+    width: 38,
+  },
+  list: {
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
+  loadingText: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 14,
+    lineHeight: 19,
+  },
+  notificationBody: {
+    color: paperColors.ink1,
+    fontFamily: paperFonts.handBold,
+    fontSize: 14,
+    lineHeight: 20,
     marginTop: 2,
-    width: 36,
   },
-  notifContent: {
+  notificationCard: {
+    alignItems: 'flex-start',
+    borderColor: paperColors.ink0,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    flexDirection: 'row',
+    gap: 11,
+    paddingHorizontal: 13,
+    paddingVertical: 13,
+    position: 'relative',
+    ...paperShadow,
+  },
+  notificationCopy: {
     flex: 1,
-    gap: 2,
+    minWidth: 0,
   },
-  notifTopRow: {
+  notificationIcon: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(253,251,245,0.68)',
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 1.2,
+    height: 38,
+    justifyContent: 'center',
+    marginTop: 1,
+    width: 38,
+  },
+  notificationLabel: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 13,
+    lineHeight: 17,
+  },
+  notificationTime: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 5,
+  },
+  notificationTop: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: spacing.xs,
+    gap: 7,
   },
-  notifType: {
-    color: colors.text.primary,
-    fontSize: typography.label.fontSize,
-    fontWeight: typography.bodyStrong.fontWeight,
+  screen: {
+    backgroundColor: paperColors.paper0,
+    flex: 1,
   },
-  unreadDot: {
-    backgroundColor: colors.brand.primary,
-    borderRadius: 4,
-    height: 7,
-    width: 7,
+  topBar: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    paddingBottom: 6,
+    paddingHorizontal: 16,
   },
-  notifBody: {
-    color: colors.text.secondary,
-    fontSize: typography.body.fontSize,
-    lineHeight: typography.body.lineHeight,
+  topTitle: {
+    color: paperColors.ink0,
+    flex: 1,
+    fontFamily: paperFonts.pen,
+    fontSize: 26,
+    lineHeight: 32,
+    textAlign: 'center',
   },
-  notifTime: {
-    color: colors.text.tertiary,
-    fontSize: 12,
-    marginTop: 2,
+  unreadMark: {
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 1,
+    color: paperColors.coral,
+    fontFamily: paperFonts.handBold,
+    fontSize: 10,
+    lineHeight: 13,
+    overflow: 'hidden',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
   },
 });

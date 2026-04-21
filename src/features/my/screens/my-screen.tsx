@@ -1,10 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useNavigation } from 'expo-router';
-import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { AppHeader } from '@/components/shell/app-header';
-import { colors, radius, spacing, typography } from '@/constants/tokens';
+import {
+  PaperAvatar,
+  Tape,
+  paperColors,
+  paperFonts,
+  paperShadow,
+  toneFromIndex,
+} from '@/components/ui/paper-design';
 import { useAppSession } from '@/providers/app-session-provider';
+import { useFontPreference } from '@/providers/font-preference-provider';
 
 type MenuItem = {
   icon: keyof typeof Ionicons.glyphMap;
@@ -15,52 +23,54 @@ type MenuItem = {
 };
 
 export default function MyScreen() {
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const { isAuthenticating, signOut, user } = useAppSession();
+  const { bodyTextStyle, fontPreset, fontPresets, setFontPreset, strongTextStyle } = useFontPreference();
 
   function handleBack() {
     if (navigation.canGoBack()) {
       router.back();
-    } else {
-      router.replace('/');
+      return;
     }
+
+    router.replace('/');
   }
 
   async function handleSignOut() {
-    Alert.alert('로그아웃', '정말 로그아웃 하시겠어요?', [
-      { text: '취소', style: 'cancel' },
+    Alert.alert('로그아웃할까요?', '다시 들어오려면 계정 인증이 필요합니다.', [
+      { style: 'cancel', text: '취소' },
       {
-        text: '로그아웃',
-        style: 'destructive',
         onPress: async () => {
           await signOut();
           router.replace('/sign-in');
         },
+        style: 'destructive',
+        text: '로그아웃',
       },
     ]);
   }
 
   const displayName = user?.user_metadata?.full_name ?? 'Tabbit 사용자';
   const email = user?.email ?? '';
-  const initial = displayName.charAt(0);
 
   const menuItems: MenuItem[] = [
     {
+      desc: '이름, 핸들, 프로필 사진',
       icon: 'person-outline',
       label: '프로필 편집',
-      desc: '이름, 핸들, 프로필 사진',
       onPress: () => {},
     },
     {
+      desc: '인증, 채팅, 스토리 알림',
       icon: 'notifications-outline',
       label: '알림 설정',
-      desc: '인증, 채팅, 스토리 알림',
       onPress: () => {},
     },
     {
+      desc: '로그인, 연결, 데이터',
       icon: 'shield-checkmark-outline',
       label: '계정 및 보안',
-      desc: 'Google 연동, 데이터 관리',
       onPress: () => {},
     },
     {
@@ -69,216 +79,351 @@ export default function MyScreen() {
       onPress: () => {},
     },
     {
-      icon: 'log-out-outline',
-      label: isAuthenticating ? '로그아웃 중…' : '로그아웃',
-      onPress: handleSignOut,
       danger: true,
+      icon: 'log-out-outline',
+      label: isAuthenticating ? '로그아웃 중' : '로그아웃',
+      onPress: () => void handleSignOut(),
     },
   ];
 
   return (
     <View style={styles.screen}>
-      <AppHeader onBack={handleBack} title="마이페이지" variant="detail" />
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: insets.bottom + 34, paddingTop: insets.top + 8 },
+        ]}
+        showsVerticalScrollIndicator={false}>
+        <View style={styles.topBar}>
+          <Pressable accessibilityLabel="뒤로가기" onPress={handleBack} style={styles.iconButton}>
+            <Ionicons color={paperColors.ink0} name="chevron-back" size={24} />
+          </Pressable>
+          <Text style={styles.topTitle}>내 공간</Text>
+          <View style={styles.iconButton} />
+        </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* 프로필 헤더 */}
-        <View style={styles.profileSection}>
-          <View style={styles.avatarLarge}>
-            <Text style={styles.avatarLargeText}>{initial}</Text>
-          </View>
-          <View style={styles.profileInfo}>
-            <Text style={styles.displayName}>{displayName}</Text>
-            {email ? <Text style={styles.email}>{email}</Text> : null}
+        <View style={styles.profileCard}>
+          <Tape angle={-6} left={34} top={-10} width={78} />
+          <PaperAvatar label={displayName} size={76} tone="butter" />
+          <View style={styles.profileCopy}>
+            <Text numberOfLines={1} style={[styles.displayName, strongTextStyle]}>{displayName}</Text>
+            {email ? <Text numberOfLines={1} style={[styles.email, bodyTextStyle]}>{email}</Text> : null}
           </View>
         </View>
 
-        {/* 통계 미리보기 */}
-        <View style={styles.statsRow}>
+        <View style={styles.statsCard}>
           <View style={styles.statBox}>
-            <Text style={styles.statValue}>—</Text>
+            <Text style={styles.statValue}>-</Text>
             <Text style={styles.statLabel}>총 인증</Text>
           </View>
           <View style={styles.statDivider} />
           <View style={styles.statBox}>
-            <Text style={styles.statValue}>—</Text>
+            <Text style={styles.statValue}>-</Text>
             <Text style={styles.statLabel}>참여 그룹</Text>
           </View>
           <View style={styles.statDivider} />
           <View style={styles.statBox}>
-            <Text style={styles.statValue}>—</Text>
+            <Text style={styles.statValue}>-</Text>
             <Text style={styles.statLabel}>연속일</Text>
           </View>
         </View>
 
-        {/* 메뉴 */}
-        <View style={styles.menuSection}>
-          {menuItems.map((item) => (
-            <TouchableOpacity
+        <View style={styles.fontCard}>
+          <Tape angle={-5} left={28} top={-10} width={72} />
+          <View style={styles.fontHeader}>
+            <View>
+              <Text style={[styles.fontTitle, strongTextStyle]}>읽는 글씨</Text>
+              <Text style={[styles.fontHint, bodyTextStyle]}>로고와 스탬프는 그대로 둬요</Text>
+            </View>
+            <Ionicons color={paperColors.ink2} name="text-outline" size={21} />
+          </View>
+          <View style={styles.fontOptions}>
+            {fontPresets.map((preset) => {
+              const active = preset.id === fontPreset.id;
+
+              return (
+                <Pressable
+                  accessibilityLabel={`${preset.label} 글씨체 선택`}
+                  accessibilityRole="button"
+                  key={preset.id}
+                  onPress={() => void setFontPreset(preset.id)}
+                  style={[
+                    styles.fontOption,
+                    active ? styles.fontOptionActive : undefined,
+                  ]}>
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.fontOptionLabel,
+                      preset.regularFamily ? { fontFamily: preset.regularFamily } : undefined,
+                    ]}>
+                    {preset.label}
+                  </Text>
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.fontOptionDesc,
+                      preset.regularFamily ? { fontFamily: preset.regularFamily } : undefined,
+                    ]}>
+                    {preset.description}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+
+        <View style={styles.menuCard}>
+          <Tape angle={7} right={30} top={-10} width={74} />
+          {menuItems.map((item, index) => (
+            <Pressable
               accessibilityLabel={item.label}
               accessibilityRole="button"
-              activeOpacity={0.65}
+              disabled={isAuthenticating && item.danger}
               key={item.label}
               onPress={item.onPress}
-              style={styles.menuRow}
-            >
-              <View style={[styles.menuIconCircle, item.danger && styles.menuIconCircleDanger]}>
+              style={[styles.menuRow, index > 0 ? styles.menuRowDivider : undefined]}>
+              <View
+                style={[
+                  styles.menuIconCircle,
+                  {
+                    backgroundColor: item.danger ? paperColors.peach : paperColors[toneFromIndex(index)],
+                  },
+                ]}>
                 <Ionicons
-                  color={item.danger ? colors.status.danger : colors.brand.primary}
+                  color={item.danger ? paperColors.coral : paperColors.ink0}
                   name={item.icon}
                   size={18}
                 />
               </View>
               <View style={styles.menuTextGroup}>
-                <Text style={[styles.menuLabel, item.danger && styles.menuLabelDanger]}>
+                <Text style={[styles.menuLabel, strongTextStyle, item.danger ? styles.menuLabelDanger : undefined]}>
                   {item.label}
                 </Text>
-                {item.desc ? <Text style={styles.menuDesc}>{item.desc}</Text> : null}
+                {item.desc ? <Text style={[styles.menuDesc, bodyTextStyle]}>{item.desc}</Text> : null}
               </View>
               {!item.danger ? (
-                <Ionicons color={colors.text.tertiary} name="chevron-forward" size={16} />
+                <Ionicons color={paperColors.ink2} name="chevron-forward" size={16} />
               ) : null}
-            </TouchableOpacity>
+            </Pressable>
           ))}
         </View>
 
-        {/* 앱 정보 */}
-        <Text style={styles.version}>Tabbit v0.1.0 · MVP</Text>
+        <Text style={[styles.version, bodyTextStyle]}>Tabbit v0.1.0</Text>
       </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    backgroundColor: colors.bg.canvas,
-    flex: 1,
-  },
-  scrollContent: {
-    gap: spacing.lg,
-    paddingBottom: spacing.xxxl,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
-  },
-
-  // 프로필 헤더
-  profileSection: {
-    alignItems: 'center',
-    backgroundColor: colors.bg.warm,
-    borderColor: colors.line.warm,
-    borderRadius: radius.sheet,
-    borderWidth: 1,
-    gap: spacing.md,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.xl,
-  },
-  avatarLarge: {
-    alignItems: 'center',
-    backgroundColor: colors.surface.inverse,
-    borderColor: colors.brand.accent,
-    borderWidth: 2,
-    borderRadius: 36,
-    height: 72,
-    justifyContent: 'center',
-    width: 72,
-  },
-  avatarLargeText: {
-    color: colors.text.inverse,
-    fontSize: 28,
-    fontWeight: '700',
-  },
-  profileInfo: {
-    alignItems: 'center',
-    gap: spacing.xxs,
-  },
   displayName: {
-    color: colors.text.primary,
-    fontSize: typography.title.fontSize,
-    fontWeight: typography.title.fontWeight,
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 25,
+    lineHeight: 31,
+    textAlign: 'center',
   },
   email: {
-    color: colors.text.secondary,
-    fontSize: typography.body.fontSize,
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: 'center',
   },
-
-  // 통계
-  statsRow: {
+  iconButton: {
     alignItems: 'center',
-    backgroundColor: colors.surface.raised,
-    borderColor: colors.line.soft,
-    borderRadius: radius.card,
-    borderWidth: 1,
+    height: 38,
+    justifyContent: 'center',
+    width: 38,
+  },
+  fontCard: {
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    gap: 12,
+    padding: 16,
+    position: 'relative',
+    ...paperShadow,
+  },
+  fontHeader: {
+    alignItems: 'center',
     flexDirection: 'row',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.lg,
+    justifyContent: 'space-between',
   },
-  statBox: {
-    alignItems: 'center',
-    flex: 1,
-    gap: spacing.xxs,
-  },
-  statValue: {
-    color: colors.text.primary,
-    fontSize: 22,
-    fontWeight: '700',
-  },
-  statLabel: {
-    color: colors.text.tertiary,
+  fontHint: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
     fontSize: 12,
-    fontWeight: '600',
+    lineHeight: 17,
+    marginTop: 2,
   },
-  statDivider: {
-    backgroundColor: colors.line.soft,
-    height: 28,
-    width: 1,
+  fontOption: {
+    backgroundColor: paperColors.paper1,
+    borderColor: paperColors.ink0,
+    borderRadius: 14,
+    borderWidth: 1.1,
+    flexBasis: '48%',
+    flexGrow: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
-
-  // 메뉴
-  menuSection: {
-    backgroundColor: colors.surface.raised,
-    borderColor: colors.line.soft,
-    borderRadius: radius.card,
-    borderWidth: 1,
+  fontOptionActive: {
+    backgroundColor: paperColors.butter,
+    shadowColor: paperColors.ink0,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 1,
+    shadowRadius: 0,
+    elevation: 2,
+  },
+  fontOptionDesc: {
+    color: paperColors.ink2,
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 2,
+  },
+  fontOptionLabel: {
+    color: paperColors.ink0,
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 19,
+  },
+  fontOptions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  fontTitle: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 20,
+    lineHeight: 25,
+  },
+  menuCard: {
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 8,
+    borderWidth: 1.5,
     overflow: 'hidden',
+    position: 'relative',
+    ...paperShadow,
+  },
+  menuDesc: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 1,
+  },
+  menuIconCircle: {
+    alignItems: 'center',
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 1.2,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  menuLabel: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  menuLabelDanger: {
+    color: paperColors.coral,
   },
   menuRow: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
+    gap: 11,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
   },
-  menuIconCircle: {
-    alignItems: 'center',
-    backgroundColor: colors.brand.primarySoft,
-    borderRadius: radius.pill,
-    height: 34,
-    justifyContent: 'center',
-    width: 34,
-  },
-  menuIconCircleDanger: {
-    backgroundColor: '#F5E5E5',
+  menuRowDivider: {
+    borderTopColor: 'rgba(27,26,23,0.1)',
+    borderTopWidth: 1,
   },
   menuTextGroup: {
     flex: 1,
-    gap: 1,
+    minWidth: 0,
   },
-  menuLabel: {
-    color: colors.text.primary,
-    fontSize: typography.body.fontSize,
-    fontWeight: typography.bodyStrong.fontWeight,
+  profileCard: {
+    alignItems: 'center',
+    backgroundColor: paperColors.sage,
+    borderColor: paperColors.ink0,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    gap: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 22,
+    position: 'relative',
+    ...paperShadow,
   },
-  menuLabelDanger: {
-    color: colors.status.danger,
+  profileCopy: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
   },
-  menuDesc: {
-    color: colors.text.tertiary,
-    fontSize: 12,
+  screen: {
+    backgroundColor: paperColors.paper0,
+    flex: 1,
   },
-
-  // 버전
+  scrollContent: {
+    gap: 15,
+    paddingHorizontal: 16,
+  },
+  statBox: {
+    alignItems: 'center',
+    flex: 1,
+    gap: 2,
+  },
+  statDivider: {
+    backgroundColor: 'rgba(27,26,23,0.16)',
+    height: 30,
+    width: 1,
+  },
+  statLabel: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  statValue: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.pen,
+    fontSize: 29,
+    lineHeight: 32,
+  },
+  statsCard: {
+    alignItems: 'center',
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    flexDirection: 'row',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    ...paperShadow,
+  },
+  topBar: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 40,
+  },
+  topTitle: {
+    color: paperColors.ink0,
+    flex: 1,
+    fontFamily: paperFonts.pen,
+    fontSize: 26,
+    lineHeight: 32,
+    textAlign: 'center',
+  },
   version: {
-    color: colors.text.tertiary,
+    color: paperColors.ink3,
+    fontFamily: paperFonts.handBold,
     fontSize: 12,
+    lineHeight: 17,
     textAlign: 'center',
   },
 });

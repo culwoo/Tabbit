@@ -1,23 +1,24 @@
 import { Ionicons } from '@expo/vector-icons';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useRouter } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { colors, radius, shadow, spacing, typography } from '@/constants/tokens';
+import { paperColors } from '@/components/ui/paper-design';
+import { spacing } from '@/constants/tokens';
 
 const tabConfig = {
   calendar: {
     icon: 'calendar-outline',
-    label: '캘린더',
+    label: '달력',
   },
   index: {
     icon: 'home-outline',
     label: '홈',
   },
   camera: {
-    icon: 'camera',
-    label: '카메라',
+    icon: 'camera-outline',
+    label: '인증',
   },
 } as const;
 
@@ -26,13 +27,7 @@ export function BottomPillTabBar({ state, descriptors, navigation }: BottomTabBa
   const router = useRouter();
 
   return (
-    <View
-      style={[
-        styles.outer,
-        {
-          paddingBottom: insets.bottom + spacing.sm,
-        },
-      ]}>
+    <View style={[styles.outer, { paddingBottom: insets.bottom + spacing.sm }]}>
       <View style={styles.inner}>
         {state.routes.map((route, index) => {
           const isFocused = state.index === index;
@@ -63,40 +58,20 @@ export function BottomPillTabBar({ state, descriptors, navigation }: BottomTabBa
 
           return (
             <Pressable
-              key={route.key}
               accessibilityLabel={descriptors[route.key]?.options.tabBarAccessibilityLabel}
               accessibilityRole="tab"
               accessibilityState={isFocused ? { selected: true } : {}}
+              android_ripple={{ color: 'transparent' }}
+              key={route.key}
               onPress={onPress}
-              style={({ pressed }) => [
-                route.name === 'camera' ? styles.cameraWrap : styles.tabWrap,
-                {
-                  opacity: pressed ? 0.86 : 1,
-                },
-              ]}>
-              {route.name === 'camera' ? (
-                <View style={styles.cameraButton}>
-                  <Ionicons color={colors.text.inverse} name={config.icon} size={22} />
-                  <Text style={styles.cameraLabel}>{config.label}</Text>
-                </View>
-              ) : (
-                <View style={[styles.tabButton, isFocused ? styles.tabButtonActive : undefined]}>
-                  <Ionicons
-                    color={isFocused ? colors.text.primary : colors.text.tertiary}
-                    name={config.icon}
-                    size={20}
-                  />
-                  <Text
-                    style={[
-                      styles.tabLabel,
-                      {
-                        color: isFocused ? colors.text.primary : colors.text.tertiary,
-                      },
-                    ]}>
-                    {config.label}
-                  </Text>
-                </View>
-              )}
+              style={({ pressed }) => [styles.tabWrap, { opacity: pressed ? 0.86 : 1 }]}>
+              <View style={[styles.tabButton, isFocused ? styles.tabButtonActive : undefined]}>
+                <Ionicons
+                  color={isFocused ? paperColors.card : paperColors.ink1}
+                  name={config.icon}
+                  size={route.name === 'camera' ? 22 : 20}
+                />
+              </View>
             </Pressable>
           );
         })}
@@ -106,66 +81,42 @@ export function BottomPillTabBar({ state, descriptors, navigation }: BottomTabBa
 }
 
 const styles = StyleSheet.create({
+  inner: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    backgroundColor: 'rgba(253,251,245,0.94)',
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 58,
+    paddingHorizontal: 13,
+    paddingVertical: 6,
+    shadowColor: '#1E190F',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.15,
+    shadowRadius: 18,
+    elevation: 4,
+  },
   outer: {
-    backgroundColor: colors.bg.canvas,
+    backgroundColor: paperColors.paper0,
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
   },
-  inner: {
-    alignItems: 'center',
-    backgroundColor: colors.surface.raised,
-    borderColor: colors.line.warm,
-    borderRadius: 28,
-    borderWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    minHeight: 74,
-    paddingHorizontal: spacing.sm,
-    ...shadow.floating,
-  },
-  tabWrap: {
-    flex: 1,
-    paddingVertical: spacing.xs,
-  },
   tabButton: {
     alignItems: 'center',
-    borderRadius: radius.pill,
-    gap: spacing.xxs,
+    borderRadius: 999,
     justifyContent: 'center',
-    minHeight: 52,
-    paddingHorizontal: spacing.sm,
+    height: 44,
+    width: 44,
   },
   tabButtonActive: {
-    backgroundColor: colors.brand.butterSoft,
+    backgroundColor: 'rgba(70, 67, 61, 0.82)',
   },
-  tabLabel: {
-    fontSize: typography.label.fontSize,
-    fontWeight: typography.label.fontWeight,
-    lineHeight: typography.label.lineHeight,
-  },
-  cameraWrap: {
-    alignItems: 'center',
-    flex: 1,
-    marginTop: -22,
-  },
-  cameraButton: {
-    alignItems: 'center',
-    backgroundColor: colors.surface.inverse,
-    borderColor: colors.brand.accent,
-    borderRadius: 24,
-    borderWidth: 2,
-    gap: spacing.xxs,
-    justifyContent: 'center',
-    minHeight: 64,
-    minWidth: 86,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    ...shadow.floating,
-  },
-  cameraLabel: {
-    color: colors.text.inverse,
-    fontSize: 13,
-    fontWeight: '800',
-    lineHeight: 16,
+  tabWrap: {
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingVertical: 0,
   },
 });

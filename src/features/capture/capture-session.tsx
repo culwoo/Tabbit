@@ -55,8 +55,10 @@ type CaptureSessionValue = CaptureSessionState & {
   createPersonalTag: (label: string) => Promise<void>;
   openSourceSelector: () => void;
   requestAssetFromSource: (source: MediaSource, fallbackStage?: CaptureFlowStage) => Promise<void>;
+  setCapturedAsset: (asset: CaptureDraft['asset'], sourceType: MediaSource) => void;
   setCaption: (caption: string) => void;
   toggleTag: (tagId: string) => void;
+  toggleShareTarget: (groupId: string) => void;
   goToCompose: () => void;
   goToPreview: () => void;
   submitDraft: () => Promise<void>;
@@ -72,6 +74,7 @@ const initialDraft: CaptureDraft = {
   sourceType: null,
   caption: '',
   selectedTagIds: [],
+  disabledGroupIds: [],
   resolvedTargets: [],
   dirty: false,
   lastError: null,
@@ -110,6 +113,7 @@ type CaptureSessionAction =
       selectedTagIds: string[];
       resolvedTargets: CaptureDraft['resolvedTargets'];
     }
+  | { type: 'TOGGLE_SHARE_TARGET'; groupId: string }
   | { type: 'CLEAR_LAST_ERROR' }
   | { type: 'SET_LAST_ERROR'; message: string | null }
   | { type: 'START_UPLOAD'; retryCount: number }
@@ -137,12 +141,21 @@ type CaptureSessionAction =
 
 function isDraftDirty(draft: CaptureDraft) {
   return Boolean(
-    draft.asset ||
+      draft.asset ||
       draft.caption.trim().length > 0 ||
       draft.selectedTagIds.length > 0 ||
+      draft.disabledGroupIds.length > 0 ||
       draft.resolvedTargets.length > 0 ||
       draft.lastError,
   );
+}
+
+function pruneDisabledGroupIds(
+  disabledGroupIds: readonly string[],
+  resolvedTargets: readonly CaptureDraft['resolvedTargets'][number][],
+) {
+  const resolvedGroupIds = new Set(resolvedTargets.map((target) => target.groupId));
+  return disabledGroupIds.filter((groupId) => resolvedGroupIds.has(groupId));
 }
 
 function withDirtyDraft(draft: CaptureDraft): CaptureDraft {
@@ -217,12 +230,27 @@ function captureSessionReducer(
       const nextDraft = withDirtyDraft({
         ...state.draft,
         selectedTagIds: action.selectedTagIds,
+        disabledGroupIds: pruneDisabledGroupIds(state.draft.disabledGroupIds, action.resolvedTargets),
         resolvedTargets: action.resolvedTargets,
       });
 
       return {
         ...state,
         draft: nextDraft,
+      };
+    }
+    case 'TOGGLE_SHARE_TARGET': {
+      const isDisabled = state.draft.disabledGroupIds.includes(action.groupId);
+      const disabledGroupIds = isDisabled
+        ? state.draft.disabledGroupIds.filter((groupId) => groupId !== action.groupId)
+        : [...state.draft.disabledGroupIds, action.groupId];
+
+      return {
+        ...state,
+        draft: withDirtyDraft({
+          ...state.draft,
+          disabledGroupIds: pruneDisabledGroupIds(disabledGroupIds, state.draft.resolvedTargets),
+        }),
       };
     }
     case 'CLEAR_LAST_ERROR': {
@@ -342,6 +370,7 @@ function captureSessionReducer(
         tagDirectoryError: null,
         draft: withDirtyDraft({
           ...state.draft,
+          disabledGroupIds: pruneDisabledGroupIds(state.draft.disabledGroupIds, nextResolvedTargets),
           resolvedTargets: nextResolvedTargets,
         }),
       };
@@ -364,6 +393,7 @@ function captureSessionReducer(
         draft: withDirtyDraft({
           ...state.draft,
           selectedTagIds,
+          disabledGroupIds: pruneDisabledGroupIds(state.draft.disabledGroupIds, nextResolvedTargets),
           resolvedTargets: nextResolvedTargets,
         }),
       };
@@ -553,6 +583,14 @@ export function CaptureSessionProvider({ children }: PropsWithChildren) {
     dispatch({ type: 'SET_CAPTION', caption });
   }
 
+  function setCapturedAsset(asset: CaptureDraft['asset'], sourceType: MediaSource) {
+    if (!asset) {
+      return;
+    }
+
+    dispatch({ type: 'SET_ASSET', asset, sourceType });
+  }
+
   function toggleTag(tagId: string) {
     const selectedTagIds = state.draft.selectedTagIds.includes(tagId)
       ? state.draft.selectedTagIds.filter((selectedTagId) => selectedTagId !== tagId)
@@ -564,6 +602,10 @@ export function CaptureSessionProvider({ children }: PropsWithChildren) {
       selectedTagIds: nextSelection.selectedTagIds,
       resolvedTargets: nextSelection.resolvedTargets,
     });
+  }
+
+  function toggleShareTarget(groupId: string) {
+    dispatch({ type: 'TOGGLE_SHARE_TARGET', groupId });
   }
 
   function openSourceSelector() {
@@ -607,8 +649,10 @@ export function CaptureSessionProvider({ children }: PropsWithChildren) {
         createPersonalTag,
         openSourceSelector,
         requestAssetFromSource,
+        setCapturedAsset,
         setCaption,
         toggleTag,
+        toggleShareTarget,
         goToCompose,
         goToPreview,
         submitDraft,

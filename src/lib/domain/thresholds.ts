@@ -10,6 +10,10 @@ export function resolveEffectiveThreshold(rule: ThresholdRule, eligibleMemberCou
     return 0;
   }
 
+  if (eligibleMemberCount <= 2) {
+    return eligibleMemberCount;
+  }
+
   switch (rule) {
     case 'ALL':
       return eligibleMemberCount;
@@ -30,7 +34,7 @@ export function formatThresholdSummary(rule: ThresholdRule, eligibleMemberCount:
   const threshold = resolveEffectiveThreshold(rule, eligibleMemberCount);
 
   if (threshold === eligibleMemberCount) {
-    return '전원 인증';
+    return '모두 인증';
   }
 
   return `${threshold}/${eligibleMemberCount}명 인증`;

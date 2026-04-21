@@ -48,7 +48,8 @@ const PERSONAL_TAG_ID_PREFIX = 'personal:';
 
 function createSubmissionKey(draft: CaptureDraft) {
   const sortedTags = [...draft.selectedTagIds].sort().join('|');
-  return `${draft.asset?.uri ?? 'no-asset'}::${draft.caption.trim()}::${sortedTags}`;
+  const disabledGroups = [...draft.disabledGroupIds].sort().join('|');
+  return `${draft.asset?.uri ?? 'no-asset'}::${draft.caption.trim()}::${sortedTags}::${disabledGroups}`;
 }
 
 function toPermissionState(
@@ -553,7 +554,16 @@ export async function submitCertification(
     throw createError('NO_TARGETS', '선택한 태그와 연결된 그룹이 없습니다.');
   }
 
-  const groupShareTargets = draftResolution.resolvedGroupTargets.flatMap((target) =>
+  const disabledGroupIds = new Set(draft.disabledGroupIds);
+  const activeGroupTargets = draftResolution.resolvedGroupTargets.filter(
+    (target) => !disabledGroupIds.has(target.groupId),
+  );
+
+  if (activeGroupTargets.length === 0 && selectedPersonalTags.length === 0) {
+    throw createError('NO_TARGETS', '선택한 태그를 저장할 개인공간이나 공유할 그룹이 없습니다.');
+  }
+
+  const groupShareTargets = activeGroupTargets.flatMap((target) =>
     target.matchedGroupTagIds.map((groupTagId) => ({
       groupId: target.groupId,
       groupTagId,
@@ -591,8 +601,8 @@ export async function submitCertification(
     groupTagLabels: draftResolution.command.groupTagLabels,
     lifestyleDate: cert.lifestyle_date,
     editableUntil: cert.editable_until,
-    completedGroupCount: draftResolution.resolvedGroupTargets.length,
-    targets: draftResolution.resolvedGroupTargets,
+    completedGroupCount: activeGroupTargets.length,
+    targets: activeGroupTargets,
     createdAt: cert.uploaded_at,
     command: draftResolution.command,
   };

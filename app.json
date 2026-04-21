@@ -25,6 +25,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "resize",
       "googleServicesFile": "./google-services.json",
       "predictiveBackGestureEnabled": false,
       "package": "com.tabbit.app",
@@ -50,10 +51,16 @@
     "plugins": [
       "expo-router",
       [
+        "expo-camera",
+        {
+          "cameraPermission": "Tabbit에서 인증 사진을 바로 촬영하려면 카메라 권한이 필요합니다."
+        }
+      ],
+      [
         "expo-image-picker",
         {
           "cameraPermission": "Tabbit에서 인증 사진을 촬영하려면 카메라 권한이 필요합니다.",
-          "photosPermission": "Tabbit에서 기존 인증 사진을 가져오려면 사진 라이브러리 권한이 필요합니다."
+          "photosPermission": "Tabbit에서 기존 인증 사진을 가져오려면 사진 보관함 권한이 필요합니다."
         }
       ],
       [

@@ -1,22 +1,46 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View, ActivityIndicator } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams, useNavigation } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ViewShot from 'react-native-view-shot';
 
-import { AppHeader } from '@/components/shell/app-header';
-import { AppButton } from '@/components/ui/app-button';
-import { SoftCard } from '@/components/ui/soft-card';
-import { colors, radius, spacing, typography } from '@/constants/tokens';
-import { StoryMemberTile } from '@/features/group/components/story-member-tile';
+import {
+  PaperAvatar,
+  PhotoBlock,
+  Polaroid,
+  Stamp,
+  Tape,
+  colorForTone,
+  paperColors,
+  paperFonts,
+  paperShadow,
+  stripHash,
+  toneFromIndex,
+  withHash,
+} from '@/components/ui/paper-design';
 import { StoryShareModal } from '@/features/group/components/story-share-modal';
 import { exportStoryShare } from '@/features/group/lib/export-story-share';
 import { formatLifeDayLabel, formatTimestampLabel, isArchiveLifeDay } from '@/lib/life-day';
 import { trackEvent } from '@/lib/monitoring';
-import { addGroupTag, deleteGroupTag } from '@/lib/supabase';
-import { useGroupDetail, type GroupTagEntry } from '../hooks/use-group-detail';
+import { addGroupTag } from '@/lib/supabase';
 import { useAppSession } from '@/providers/app-session-provider';
+
+import {
+  useGroupDetail,
+  type GroupMemberWithCert,
+  type GroupTagEntry,
+} from '../hooks/use-group-detail';
 
 function buildShareRoute(groupId: string, tagId: string, lifeDay?: string, shareMode?: boolean) {
   const query = new URLSearchParams();
@@ -31,19 +55,35 @@ function buildShareRoute(groupId: string, tagId: string, lifeDay?: string, share
   return `/groups/${groupId}?${query.toString()}`;
 }
 
-function renderStatusLabel(tagEntry: GroupTagEntry) {
-  if (tagEntry.thresholdState.status === 'expired') {
-    return '아카이브 고정';
+function buildCaptureRoute(tagLabel: string) {
+  const query = new URLSearchParams();
+  const tag = stripHash(tagLabel);
+
+  if (tag) {
+    query.set('tag', tag);
   }
 
-  if (tagEntry.thresholdState.status === 'provisional_unlocked' || tagEntry.thresholdState.status === 'finalized') {
-    return '공유 가능';
+  return `/capture?${query.toString()}`;
+}
+
+function getCertifiedCount(tagEntry: GroupTagEntry) {
+  return tagEntry.members.filter((member) => member.isCertified).length;
+}
+
+function getRequiredCount(tagEntry: GroupTagEntry) {
+  if ('effective_threshold' in tagEntry.thresholdState && tagEntry.thresholdState.effective_threshold > 0) {
+    return tagEntry.thresholdState.effective_threshold;
   }
 
-  return '잠금 상태';
+  return Math.max(1, tagEntry.members.length, getCertifiedCount(tagEntry));
+}
+
+function formatMemberTime(member: GroupMemberWithCert) {
+  return member.uploadedAt ? formatTimestampLabel(member.uploadedAt) : '방금';
 }
 
 export default function GroupDetailScreen() {
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const { userId } = useAppSession();
   const params = useLocalSearchParams<{
@@ -59,13 +99,14 @@ export default function GroupDetailScreen() {
   const normalizedGroupId = Array.isArray(params.groupId) ? params.groupId[0] : params.groupId ?? '';
   const requestedLifeDay = Array.isArray(params.lifeDay) ? params.lifeDay[0] : params.lifeDay;
   const requestedShareMode = Array.isArray(params.shareMode) ? params.shareMode[0] : params.shareMode;
-
-  const { errorMessage, loading, group, tagEntries, snapshots, lifeDay, refresh } = useGroupDetail(normalizedGroupId, requestedLifeDay);
-
   const requestedTagId = Array.isArray(params.tagId) ? params.tagId[0] : params.tagId;
-  const defaultTagEntry =
-    tagEntries.find((entry) => entry.tagId === requestedTagId) ??
-    tagEntries[0];
+
+  const { errorMessage, group, lifeDay, loading, refresh, snapshots, tagEntries } = useGroupDetail(
+    normalizedGroupId,
+    requestedLifeDay,
+  );
+
+  const defaultTagEntry = tagEntries.find((entry) => entry.tagId === requestedTagId) ?? tagEntries[0];
 
   const [selectedTagId, setSelectedTagId] = useState('');
   const [newTagLabel, setNewTagLabel] = useState('');
@@ -80,20 +121,27 @@ export default function GroupDetailScreen() {
     }
   }, [defaultTagEntry?.tagId, selectedTagId]);
 
-  const selectedTag = tagEntries.find((entry) => entry.tagId === selectedTagId) ?? defaultTagEntry ?? tagEntries[0];
+  const selectedTag =
+    tagEntries.find((entry) => entry.tagId === selectedTagId) ?? defaultTagEntry ?? tagEntries[0];
 
-  const snapshot = selectedTag ? snapshots[selectedTag.tagId] : undefined;
-  const snapshotSavedAt = snapshot?.last_snapshot_exported_at ?? null;
+  const selectedIndex = Math.max(
+    0,
+    tagEntries.findIndex((entry) => entry.tagId === selectedTag?.tagId),
+  );
+  const selectedTone = toneFromIndex(selectedIndex);
+  const selectedColor = colorForTone(selectedTone);
+  const certifiedMembers = selectedTag?.members.filter((member) => member.isCertified) ?? [];
+  const selectedSnapshot = selectedTag ? snapshots[selectedTag.tagId] : undefined;
 
   const isArchiveView = useMemo(() => {
     if (!group || !selectedTag) {
       return false;
     }
-    return isArchiveLifeDay(lifeDay, selectedTag.lifeDay); // using lifeDay hook result
+    return isArchiveLifeDay(lifeDay, selectedTag.lifeDay);
   }, [group, selectedTag, lifeDay]);
 
   useEffect(() => {
-    if (!selectedTag) {
+    if (!selectedTag || !userId) {
       return;
     }
 
@@ -105,9 +153,9 @@ export default function GroupDetailScreen() {
     trackedUnlockKeys.current.add(unlockKey);
     trackEvent('threshold_unlocked', {
       groupId: normalizedGroupId,
-      tagId: selectedTag.tagId,
       lifeDay: selectedTag.lifeDay,
-      userId: userId!,
+      tagId: selectedTag.tagId,
+      userId,
     });
   }, [selectedTag, normalizedGroupId, userId]);
 
@@ -120,55 +168,17 @@ export default function GroupDetailScreen() {
   }, [requestedShareMode, selectedTag?.shareEnabled]);
 
   useEffect(() => {
-    if (!isShareModeVisible || !selectedTag) {
+    if (!isShareModeVisible || !selectedTag || !userId) {
       return;
     }
 
     trackEvent('share_mode_opened', {
-      userId: userId!,
       groupId: normalizedGroupId,
-      tagId: selectedTag.tagId,
       lifeDay: selectedTag.lifeDay,
+      tagId: selectedTag.tagId,
+      userId,
     });
   }, [isShareModeVisible, selectedTag, normalizedGroupId, userId]);
-
-  async function handleExport(shareAfterSave: boolean) {
-    if (!selectedTag || !group || !viewShotRef.current) {
-      return;
-    }
-
-    setExporting(true);
-    setShareError(null);
-
-    const result = await exportStoryShare({
-      captureTarget: viewShotRef.current,
-      groupId: normalizedGroupId,
-      tagId: selectedTag.tagId,
-      lifeDay: selectedTag.lifeDay,
-      exportedBy: userId!,
-      shareAfterSave,
-    });
-
-    setExporting(false);
-
-    if (!result.ok) {
-      setShareError(result.message);
-      return;
-    }
-
-    await refresh();
-
-    Alert.alert(
-      '스토리 export 완료',
-      shareAfterSave
-        ? '이미지를 저장한 뒤 시스템 공유 시트를 열었습니다.'
-        : '이미지를 기기 사진 보관함에 저장했습니다.',
-    );
-
-    if (!shareAfterSave) {
-      setShareModeVisible(false);
-    }
-  }
 
   function goHome() {
     router.replace('/');
@@ -181,6 +191,48 @@ export default function GroupDetailScreen() {
     }
 
     goHome();
+  }
+
+  function goSettings() {
+    router.push(`/groups/settings/${normalizedGroupId}`);
+  }
+
+  async function handleExport(shareAfterSave: boolean) {
+    if (!selectedTag || !group || !viewShotRef.current || !userId) {
+      return;
+    }
+
+    setExporting(true);
+    setShareError(null);
+
+    const result = await exportStoryShare({
+      captureTarget: viewShotRef.current,
+      exportedBy: userId,
+      groupId: normalizedGroupId,
+      lifeDay: selectedTag.lifeDay,
+      shareAfterSave,
+      tagId: selectedTag.tagId,
+    });
+
+    setExporting(false);
+
+    if (!result.ok) {
+      setShareError(result.message);
+      return;
+    }
+
+    await refresh();
+
+    Alert.alert(
+      '스토리 카드 저장 완료',
+      shareAfterSave
+        ? '이미지를 저장하고 공유 시트를 열었습니다.'
+        : '이미지를 기기 사진 보관함에 저장했습니다.',
+    );
+
+    if (!shareAfterSave) {
+      setShareModeVisible(false);
+    }
   }
 
   async function handleCreateGroupTag() {
@@ -207,45 +259,11 @@ export default function GroupDetailScreen() {
     }
   }
 
-  function handleDeleteSelectedTag() {
-    if (!selectedTag) {
-      return;
-    }
-
-    Alert.alert(
-      '태그를 삭제할까요?',
-      `${selectedTag.tagLabel} 태그를 이 그룹에서 삭제합니다. 이미 인증에 사용된 태그는 삭제되지 않을 수 있습니다.`,
-      [
-        { text: '취소', style: 'cancel' },
-        {
-          text: '삭제',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteGroupTag(normalizedGroupId, selectedTag.tagId);
-              const nextTag = tagEntries.find((entry) => entry.tagId !== selectedTag.tagId);
-              setSelectedTagId(nextTag?.tagId ?? '');
-              await refresh();
-            } catch (error) {
-              Alert.alert(
-                '태그 삭제 실패',
-                error instanceof Error ? error.message : '태그를 삭제하지 못했습니다.',
-              );
-            }
-          },
-        },
-      ],
-    );
-  }
-
   if (loading) {
     return (
-      <View style={styles.screen}>
-        <AppHeader onBack={handleBack} title="그룹" variant="detail" />
-        <View style={styles.loadingCenter}>
-          <ActivityIndicator size="large" color={colors.brand.primary} />
-          <Text style={{ marginTop: spacing.sm, color: colors.text.secondary }}>데이터를 불러오는 중입니다...</Text>
-        </View>
+      <View style={[styles.screen, styles.centerScreen, { paddingTop: insets.top }]}>
+        <ActivityIndicator color={paperColors.coral} size="large" />
+        <Text style={styles.loadingText}>그룹을 불러오는 중</Text>
       </View>
     );
   }
@@ -253,16 +271,31 @@ export default function GroupDetailScreen() {
   if (!group) {
     return (
       <View style={styles.screen}>
-        <AppHeader onBack={handleBack} title="그룹" variant="detail" />
-        <ScrollView contentContainerStyle={styles.container}>
-          <SoftCard style={styles.fallbackCard} variant="empty">
-            <Text style={styles.fallbackTitle}>그룹 데이터를 찾지 못했습니다.</Text>
+        <ScrollView
+          contentContainerStyle={[
+            styles.container,
+            { paddingBottom: insets.bottom + 36, paddingTop: insets.top + 12 },
+          ]}>
+          <View style={styles.topBar}>
+            <Pressable accessibilityLabel="뒤로가기" onPress={handleBack} style={styles.backButton}>
+              <Ionicons color={paperColors.ink0} name="chevron-back" size={24} />
+            </Pressable>
+            <Text style={styles.topTitle}>그룹</Text>
+            <View style={styles.topSpacer} />
+          </View>
+          <View style={styles.fallbackCard}>
+            <Tape angle={-6} left={26} top={-10} width={72} />
+            <Text style={styles.fallbackTitle}>그룹 데이터를 찾지 못했어요</Text>
             <Text style={styles.fallbackDescription}>
-              {errorMessage ?? `현재 ${normalizedGroupId || '선택한'} 그룹에 접근할 수 없습니다.`}
+              {errorMessage ?? `${normalizedGroupId || '선택한'} 그룹에 접근할 수 없습니다.`}
             </Text>
-            <AppButton label="다시 불러오기" onPress={() => void refresh()} variant="secondary" />
-            <AppButton label="홈으로 이동" onPress={goHome} />
-          </SoftCard>
+            <Pressable onPress={() => void refresh()} style={styles.paperButton}>
+              <Text style={styles.paperButtonText}>다시 불러오기</Text>
+            </Pressable>
+            <Pressable onPress={goHome} style={[styles.paperButton, styles.secondaryButton]}>
+              <Text style={[styles.paperButtonText, styles.secondaryButtonText]}>홈으로 이동</Text>
+            </Pressable>
+          </View>
         </ScrollView>
       </View>
     );
@@ -271,191 +304,148 @@ export default function GroupDetailScreen() {
   if (!selectedTag) {
     return (
       <View style={styles.screen}>
-        <AppHeader onBack={handleBack} title={group.name} variant="detail" />
         <ScrollView
-          contentContainerStyle={styles.container}
-          contentInsetAdjustmentBehavior="automatic"
-          showsVerticalScrollIndicator={false}>
-          <SoftCard style={styles.fallbackCard} variant="empty">
-            <Text style={styles.fallbackTitle}>첫 태그를 만들어주세요.</Text>
+          contentContainerStyle={[
+            styles.container,
+            { paddingBottom: insets.bottom + 36, paddingTop: insets.top + 12 },
+          ]}>
+          <View style={styles.topBar}>
+            <Pressable accessibilityLabel="뒤로가기" onPress={handleBack} style={styles.backButton}>
+              <Ionicons color={paperColors.ink0} name="chevron-back" size={24} />
+            </Pressable>
+            <Text numberOfLines={1} style={styles.topTitle}>
+              {group.name}
+            </Text>
+            <Pressable accessibilityLabel="그룹 설정" onPress={goSettings} style={styles.settingsButton}>
+              <Ionicons color={paperColors.ink0} name="settings-outline" size={20} />
+            </Pressable>
+          </View>
+          <View style={styles.fallbackCard}>
+            <Tape angle={-6} left={26} top={-10} width={72} />
+            <Text style={styles.fallbackTitle}>첫 태그를 만들어주세요</Text>
             <Text style={styles.fallbackDescription}>
-              그룹은 만들어졌고 접근도 가능합니다. 이제 인증에 사용할 태그를 하나 만들면 그룹 화면을 바로 사용할 수 있습니다.
+              그룹에서 함께 인증할 태그를 하나 만들면 오늘의 진행판이 바로 열립니다.
             </Text>
             <View style={styles.tagCreator}>
-              <Text style={styles.inputLabel}>그룹 태그</Text>
               <TextInput
-                value={newTagLabel}
-                onChangeText={setNewTagLabel}
                 editable={!isCreatingTag}
-                placeholder="예: #운동"
-                placeholderTextColor={colors.text.tertiary}
-                style={styles.textInput}
                 maxLength={24}
+                onChangeText={setNewTagLabel}
                 onSubmitEditing={() => void handleCreateGroupTag()}
+                placeholder="#운동"
+                placeholderTextColor={paperColors.ink3}
+                style={styles.textInput}
+                value={newTagLabel}
               />
-              <AppButton
-                label={isCreatingTag ? '태그 생성 중...' : '태그 만들기'}
-                onPress={() => void handleCreateGroupTag()}
+              <Pressable
                 disabled={!newTagLabel.trim() || isCreatingTag}
-              />
+                onPress={() => void handleCreateGroupTag()}
+                style={[styles.paperButton, (!newTagLabel.trim() || isCreatingTag) && styles.disabledButton]}>
+                <Text style={styles.paperButtonText}>
+                  {isCreatingTag ? '만드는 중...' : '태그 만들기'}
+                </Text>
+              </Pressable>
             </View>
-            <AppButton label="홈으로 이동" onPress={goHome} variant="secondary" />
-          </SoftCard>
+          </View>
         </ScrollView>
       </View>
     );
   }
 
+  const requiredCount = getRequiredCount(selectedTag);
+  const certifiedCount = getCertifiedCount(selectedTag);
+  const heroTitle = selectedTag.shareEnabled
+    ? '같이 달성!'
+    : `${Math.max(0, requiredCount - certifiedCount)}명 더 하면 돼`;
+
   return (
     <View style={styles.screen}>
-      <AppHeader onBack={handleBack} title={group.name} variant="detail" />
       <ScrollView
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[
+          styles.container,
+          { paddingBottom: insets.bottom + 42, paddingTop: insets.top + 2 },
+        ]}
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}>
-        <SoftCard style={styles.heroCard} variant="group-space">
-          <View style={styles.heroTopRow}>
-            <View style={styles.heroCopy}>
-              <Text style={styles.heroEyebrow}>{isArchiveView ? 'Saved day' : 'Team room'}</Text>
-              <Text style={styles.heroTitle}>
-                {group.name}
-              </Text>
-              {group.description && <Text style={styles.heroDescription}>{group.description}</Text>}
-            </View>
-            <View style={styles.heroActions}>
-              <Pressable
-                accessibilityLabel="홈으로 이동"
-                onPress={goHome}
-                style={styles.iconButton}>
-                <Ionicons color={colors.text.inverse} name="home-outline" size={18} />
-              </Pressable>
-              <Pressable
-                accessibilityLabel="그룹 채팅 열기"
-                onPress={() => router.push(`/groups/chat/${normalizedGroupId}`)}
-                style={styles.iconButton}>
-                <Ionicons color={colors.text.inverse} name="chatbubble-ellipses-outline" size={18} />
-              </Pressable>
-            </View>
-          </View>
-
-          <View style={styles.lifeDayRow}>
-            <View style={styles.lifeDayPill}>
-              <Text style={styles.lifeDayPillText}>{formatLifeDayLabel(selectedTag.lifeDay)}</Text>
-            </View>
-            <View style={styles.lifeDayPill}>
-              <Text style={styles.lifeDayPillText}>
-                {isArchiveView ? '마감 후 저장된 하루' : '오전 5시 전까지 반영'}
-              </Text>
-            </View>
-          </View>
-        </SoftCard>
-
-        <SoftCard style={styles.shareCard} variant="empty">
-          <View style={styles.shareCardHeader}>
-            <View style={styles.shareCardCopy}>
-              <Text style={styles.shareCardTitle}>{selectedTag.tagLabel} 오늘의 공유</Text>
-              <Text style={styles.shareCardDescription}>{selectedTag.subtitle}</Text>
-            </View>
-            <View
-              style={[
-                styles.statusChip,
-                selectedTag.thresholdState.status === 'locked'
-                  ? styles.statusChipLocked
-                  : selectedTag.thresholdState.status === 'expired'
-                    ? styles.statusChipArchive
-                    : styles.statusChipReady,
-              ]}>
-              <Text style={styles.statusChipText}>{renderStatusLabel(selectedTag)}</Text>
-            </View>
-          </View>
-
-          <View style={styles.shareMetricsRow}>
-            <View style={styles.metricBox}>
-              <Text style={styles.metricLabel}>함께한 인원</Text>
-              <Text style={styles.metricValue}>{selectedTag.shareProgressLabel}</Text>
-            </View>
-            <View style={styles.metricBox}>
-              <Text style={styles.metricLabel}>스토리 상태</Text>
-              <Text style={styles.metricValue}>
-                {'unlocked_at' in selectedTag.thresholdState && selectedTag.thresholdState.unlocked_at ? '언락됨' : '진행 대기'}
-              </Text>
-            </View>
-          </View>
-
-          {snapshotSavedAt ? (
-            <View style={styles.snapshotBanner}>
-                <Ionicons color={colors.brand.primary} name="images-outline" size={18} />
-              <View style={styles.snapshotCopy}>
-                <Text style={styles.snapshotTitle}>스토리 카드가 저장됐어요</Text>
-                <Text style={styles.snapshotDescription}>
-                  {formatTimestampLabel(snapshotSavedAt)}에 승인됨
-                </Text>
-              </View>
-            </View>
-          ) : null}
-
-          <AppButton
-            label="우리의 갓생 공유하기"
-            onPress={() => {
-              setShareError(null);
-              setShareModeVisible(true);
-            }}
-            variant={selectedTag.shareEnabled ? 'primary' : 'muted'}
-            disabled={!selectedTag.shareEnabled}
-          />
-        </SoftCard>
-
-        <SoftCard style={styles.tagManageCard} variant="empty">
-          <Text style={styles.feedTitle}>그룹 태그 관리</Text>
-          <Text style={styles.feedDescription}>
-            함께 인증할 루틴을 태그로 나눠두면 홈과 캘린더에서도 같은 흐름으로 정리됩니다.
+        <View style={styles.topBar}>
+          <Pressable accessibilityLabel="뒤로가기" onPress={handleBack} style={styles.backButton}>
+            <Ionicons color={paperColors.ink0} name="chevron-back" size={24} />
+          </Pressable>
+          <Text numberOfLines={1} style={styles.topTitle}>
+            {withHash(selectedTag.tagLabel)}
           </Text>
-          <View style={styles.tagCreator}>
-            <Text style={styles.inputLabel}>새 그룹 태그</Text>
-            <TextInput
-              value={newTagLabel}
-              onChangeText={setNewTagLabel}
-              editable={!isCreatingTag}
-              placeholder="예: #운동"
-              placeholderTextColor={colors.text.tertiary}
-              style={styles.textInput}
-              maxLength={24}
-              onSubmitEditing={() => void handleCreateGroupTag()}
-            />
-            <AppButton
-              label={isCreatingTag ? '태그 생성 중...' : '태그 추가'}
-              onPress={() => void handleCreateGroupTag()}
-              disabled={!newTagLabel.trim() || isCreatingTag}
-            />
+          <View style={styles.topRightActions}>
+            <View style={styles.avatarStack}>
+              {selectedTag.members.slice(0, 4).map((member, index) => (
+                <PaperAvatar
+                  key={member.memberId}
+                  label={member.displayName}
+                  size={28}
+                  style={{ marginLeft: index ? -8 : 0 }}
+                  tone={toneFromIndex(index)}
+                />
+              ))}
+            </View>
+            <Pressable
+              accessibilityLabel="그룹 채팅"
+              onPress={() => router.push(`/groups/chat/${normalizedGroupId}`)}
+              style={styles.settingsButton}>
+              <Ionicons color={paperColors.ink0} name="chatbubble-ellipses-outline" size={19} />
+            </Pressable>
+            <Pressable
+              accessibilityLabel="공유하기"
+              disabled={!selectedTag.shareEnabled}
+              onPress={() => {
+                setShareError(null);
+                setShareModeVisible(true);
+              }}
+              style={[
+                styles.settingsButton,
+                styles.shareTopButton,
+                !selectedTag.shareEnabled ? styles.actionButtonDisabled : undefined,
+              ]}>
+              <Ionicons
+                color={selectedTag.shareEnabled ? paperColors.ink0 : paperColors.ink3}
+                name="share-social-outline"
+                size={19}
+              />
+            </Pressable>
+            <Pressable accessibilityLabel="그룹 설정" onPress={goSettings} style={styles.settingsButton}>
+              <Ionicons color={paperColors.ink0} name="settings-outline" size={20} />
+            </Pressable>
           </View>
-          <AppButton
-            label={`${selectedTag.tagLabel} 삭제`}
-            onPress={handleDeleteSelectedTag}
-            variant="secondary"
-            disabled={tagEntries.length === 0}
-          />
-        </SoftCard>
+        </View>
 
-        <View style={styles.tagPicker}>
+        <View style={styles.tagRailWrap}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={styles.tagPillRow}>
+            <View style={styles.tagRail}>
               {tagEntries.map((entry, entryIndex) => {
-                const isSelected = entry.tagId === selectedTag.tagId;
+                const active = entry.tagId === selectedTag.tagId;
+                const done = entry.shareEnabled;
+                const tone = toneFromIndex(entryIndex);
+                const toneColor = colorForTone(tone);
 
                 return (
                   <Pressable
-                    key={`${entry.tagId}-${entry.lifeDay}-${entryIndex}`}
+                    accessibilityLabel={`${entry.tagLabel} 태그 선택`}
+                    accessibilityRole="button"
+                    key={`${entry.tagId}-${entry.lifeDay}`}
                     onPress={() => setSelectedTagId(entry.tagId)}
                     style={[
-                      styles.tagPill,
-                      isSelected ? styles.tagPillSelected : styles.tagPillIdle,
+                      styles.chapterCard,
+                      {
+                        backgroundColor: active ? toneColor : paperColors.card,
+                        transform: [{ rotate: active ? '-1deg' : '0deg' }],
+                      },
                     ]}>
-                    <Text style={[styles.tagPillTitle, isSelected && styles.tagPillTitleSelected]}>
-                      {entry.tagLabel}
+                    <Text numberOfLines={1} style={styles.chapterTitle}>
+                      {withHash(entry.tagLabel)}
                     </Text>
-                    <Text style={[styles.tagPillMeta, isSelected && styles.tagPillMetaSelected]}>
-                      {entry.shareProgressLabel}
-                    </Text>
+                    <View style={styles.chapterCountRow}>
+                      <Text style={styles.chapterCount}>{getCertifiedCount(entry)}</Text>
+                      <Text style={styles.chapterNeed}>/ {getRequiredCount(entry)}</Text>
+                    </View>
+                    {done ? <Stamp size={38} style={styles.chapterStamp} text="갓생" /> : null}
                   </Pressable>
                 );
               })}
@@ -463,51 +453,121 @@ export default function GroupDetailScreen() {
           </ScrollView>
         </View>
 
-        <SoftCard style={styles.feedIntroCard} variant="empty">
-          <Text style={styles.feedTitle}>{selectedTag.title}</Text>
-          <Text style={styles.feedDescription}>
-            멤버가 올린 인증이 이 태그 아래에 모이고, 조건을 채우면 바로 스토리 카드로 저장할 수 있어요.
-          </Text>
-          <View style={styles.inlineActions}>
-            <AppButton
-              label="날짜 상세로 보기"
-              onPress={() => router.push(`/calendar/${selectedTag.lifeDay}`)}
-              variant="secondary"
-            />
-            <AppButton
-              label="공유 모드 미리보기"
-              onPress={() => setShareModeVisible(true)}
-              variant="secondary"
-              disabled={!selectedTag.shareEnabled}
-            />
-          </View>
-        </SoftCard>
-
-        <View style={styles.memberGrid}>
-          {selectedTag.members.map((member, memberIndex) => (
-            <View key={`${member.memberId}-${selectedTag.tagId}-${memberIndex}`} style={styles.memberGridItem}>
-              <StoryMemberTile member={member} />
+        <View style={[styles.currentHero, { backgroundColor: selectedColor }]}>
+          <View style={styles.heroTop}>
+            <View style={styles.heroCopy}>
+              <Text style={styles.heroEyebrow}>오늘 {withHash(selectedTag.tagLabel)}</Text>
+              <Text style={styles.heroTitle}>{heroTitle}</Text>
+              <Text style={styles.heroSubtitle}>{formatLifeDayLabel(selectedTag.lifeDay)}</Text>
             </View>
-          ))}
+            <Text style={styles.heroCounter}>
+              {certifiedCount}
+              <Text style={styles.heroCounterSmall}>/{requiredCount}</Text>
+            </Text>
+          </View>
+
+          <View style={styles.memberDots}>
+            {selectedTag.members.map((member, index) => (
+              <View key={member.memberId} style={styles.memberDotCell}>
+                <View
+                  style={[
+                    styles.memberDot,
+                    {
+                      backgroundColor: member.isCertified
+                        ? paperColors.card
+                        : 'rgba(253,251,245,0.38)',
+                      opacity: member.isCertified ? 1 : 0.55,
+                    },
+                  ]}>
+                  <Text style={styles.memberDotText}>{stripHash(member.displayName)[0] ?? '?'}</Text>
+                  {member.isCertified ? <Text style={styles.memberCheck}>✓</Text> : null}
+                </View>
+                <Text numberOfLines={1} style={styles.memberName}>
+                  {member.displayName}
+                </Text>
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.heroActions}>
+            <Pressable
+              accessibilityLabel={`${withHash(selectedTag.tagLabel)} 인증하기`}
+              accessibilityRole="button"
+              onPress={() => router.push(buildCaptureRoute(selectedTag.tagLabel))}
+              style={styles.verifyButton}>
+              <Ionicons color={paperColors.card} name="camera-outline" size={18} />
+              <Text style={styles.verifyButtonText}>인증하기</Text>
+            </Pressable>
+            {selectedSnapshot?.last_snapshot_exported_at ? (
+              <Text style={styles.storyInlineMeta}>
+                저장됨 · {formatTimestampLabel(selectedSnapshot.last_snapshot_exported_at)}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+
+        <View style={styles.feedSectionTitle}>
+          <Text style={styles.feedTitle}>
+            {certifiedMembers.length}개의 인증 · {withHash(selectedTag.tagLabel)}
+          </Text>
+        </View>
+
+        <View style={styles.polaroidFeed}>
+          {certifiedMembers.length > 0 ? (
+            certifiedMembers.map((member, index) => {
+              const tilt = (index % 2 === 0 ? -1 : 1) * (1.5 + (index % 3) * 0.6);
+
+              return (
+                <View
+                  key={`${member.memberId}-${selectedTag.tagId}`}
+                  style={[
+                    styles.feedPolaroidWrap,
+                    {
+                      marginLeft: index % 2 === 0 ? 0 : 24,
+                      marginRight: index % 2 === 0 ? 24 : 0,
+                      transform: [{ rotate: `${tilt}deg` }],
+                    },
+                  ]}>
+                  <Tape angle={-tilt * 3} left={30} top={-10} width={60} />
+                  <Polaroid
+                    caption={`${member.displayName} · ${formatMemberTime(member)}`}
+                    tone={toneFromIndex(index)}
+                    width={260}>
+                    <PhotoBlock
+                      height={180}
+                      tone={toneFromIndex(index)}
+                      uri={member.imageUrl}
+                      width="100%"
+                    />
+                  </Polaroid>
+                </View>
+              );
+            })
+          ) : (
+            <View style={styles.emptyFeed}>
+              <Tape angle={-7} left={28} top={-10} width={64} />
+              <Text style={styles.emptyFeedTitle}>아직 붙일 사진이 없어</Text>
+              <Text style={styles.emptyFeedText}>
+                멤버가 인증을 올리면 이 태그 아래에 폴라로이드처럼 모여요.
+              </Text>
+            </View>
+          )}
         </View>
 
         {isArchiveView ? (
-          <SoftCard style={styles.archiveHintCard} variant="empty">
-            <Text style={styles.archiveHintTitle}>아카이브 재열기</Text>
-            <Text style={styles.archiveHintDescription}>
-              이 화면은 {selectedTag.lifeDay} 생활일의 참여 멤버 구성을 고정한 버전입니다. 새 인증이 들어와도 이
-              아카이브는 바뀌지 않습니다.
+          <View style={styles.manageCard}>
+            <Text style={styles.manageTitle}>아카이브 보기</Text>
+            <Text style={styles.manageDescription}>
+              {selectedTag.lifeDay} 생활일의 멤버 구성과 인증 상태로 고정된 화면입니다.
             </Text>
-            <AppButton
-              label="현재 생활일로 돌아가기"
+            <Pressable
               onPress={() =>
-                router.replace(
-                  buildShareRoute(normalizedGroupId, tagEntries[0]?.tagId ?? selectedTag.tagId),
-                )
+                router.replace(buildShareRoute(normalizedGroupId, tagEntries[0]?.tagId ?? selectedTag.tagId))
               }
-              variant="secondary"
-            />
-          </SoftCard>
+              style={styles.paperButton}>
+              <Text style={styles.paperButtonText}>현재 생활일로 돌아가기</Text>
+            </Pressable>
+          </View>
         ) : null}
       </ScrollView>
 
@@ -529,296 +589,366 @@ export default function GroupDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  loadingCenter: {
-    flex: 1,
+  avatarStack: {
+    flexDirection: 'row',
+    minWidth: 58,
+  },
+  backButton: {
     alignItems: 'center',
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  actionButtonDisabled: {
+    backgroundColor: 'rgba(27,26,23,0.08)',
+    borderColor: 'rgba(27,26,23,0.2)',
+    opacity: 0.55,
+  },
+  centerScreen: {
+    alignItems: 'center',
+    gap: 12,
     justifyContent: 'center',
   },
-  screen: {
-    flex: 1,
-    backgroundColor: colors.bg.canvas,
+  chapterCard: {
+    borderColor: paperColors.ink0,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    minWidth: 96,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    position: 'relative',
+  },
+  chapterCount: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.pen,
+    fontSize: 24,
+    lineHeight: 28,
+  },
+  chapterCountRow: {
+    alignItems: 'baseline',
+    flexDirection: 'row',
+    gap: 3,
+    marginTop: 3,
+  },
+  chapterNeed: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  chapterStamp: {
+    position: 'absolute',
+    right: -6,
+    top: -8,
+  },
+  chapterTitle: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 15,
+    lineHeight: 19,
   },
   container: {
-    gap: spacing.md,
-    padding: spacing.lg,
-    paddingBottom: spacing.xxl,
+    gap: 14,
+    paddingHorizontal: 16,
+  },
+  currentHero: {
+    borderColor: paperColors.ink0,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    gap: 14,
+    overflow: 'hidden',
+    padding: 16,
+    position: 'relative',
+  },
+  disabledButton: {
+    opacity: 0.45,
+  },
+  emptyFeed: {
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    gap: 7,
+    padding: 16,
+    position: 'relative',
+    ...paperShadow,
+  },
+  emptyFeedText: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  emptyFeedTitle: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 20,
+    lineHeight: 25,
   },
   fallbackCard: {
-    gap: spacing.sm,
-  },
-  fallbackTitle: {
-    color: colors.text.primary,
-    fontSize: typography.title.fontSize,
-    fontWeight: typography.title.fontWeight,
-    lineHeight: typography.title.lineHeight,
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    gap: 12,
+    padding: 18,
+    position: 'relative',
+    ...paperShadow,
   },
   fallbackDescription: {
-    color: colors.text.secondary,
-    fontSize: typography.body.fontSize,
-    lineHeight: typography.body.lineHeight,
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 15,
+    lineHeight: 22,
   },
-  tagCreator: {
-    gap: spacing.sm,
+  fallbackTitle: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 22,
+    lineHeight: 28,
   },
-  inputLabel: {
-    color: colors.text.secondary,
-    fontSize: typography.label.fontSize,
-    fontWeight: typography.label.fontWeight,
+  feedPolaroidWrap: {
+    alignSelf: 'center',
+    position: 'relative',
   },
-  textInput: {
-    backgroundColor: colors.surface.tertiary,
-    borderColor: colors.line.soft,
-    borderRadius: radius.input,
-    borderWidth: 1,
-    color: colors.text.primary,
-    fontSize: typography.body.fontSize,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+  feedSectionTitle: {
+    paddingHorizontal: 2,
   },
-  heroCard: {
-    backgroundColor: colors.surface.inverse,
-    borderColor: colors.brand.accent,
-    borderWidth: 2,
-    gap: spacing.md,
-  },
-  heroTopRow: {
-    alignItems: 'flex-start',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: spacing.md,
+  feedTitle: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 12,
+    letterSpacing: 0.8,
+    lineHeight: 17,
+    textTransform: 'uppercase',
   },
   heroCopy: {
     flex: 1,
-    gap: spacing.xs,
+  },
+  heroCounter: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.pen,
+    fontSize: 44,
+    lineHeight: 50,
+  },
+  heroCounterSmall: {
+    fontSize: 23,
   },
   heroEyebrow: {
-    color: colors.brand.butter,
-    fontSize: 12,
-    fontWeight: typography.eyebrow.fontWeight,
+    color: paperColors.ink1,
+    fontFamily: paperFonts.handBold,
+    fontSize: 11,
+    letterSpacing: 1,
+    lineHeight: 15,
     textTransform: 'uppercase',
   },
-  heroTitle: {
-    color: colors.text.inverse,
-    fontSize: typography.hero.fontSize,
-    fontWeight: typography.hero.fontWeight,
-    lineHeight: typography.hero.lineHeight,
-  },
-  heroDescription: {
-    color: '#E8DCEA',
-    fontSize: typography.body.fontSize,
-    lineHeight: typography.body.lineHeight,
-  },
-  heroActions: {
-    flexDirection: 'row',
-    gap: spacing.xs,
-  },
-  iconButton: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 249, 243, 0.12)',
-    borderColor: 'rgba(255, 249, 243, 0.22)',
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    height: 40,
-    justifyContent: 'center',
-    width: 40,
-  },
-  lifeDayRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-  },
-  lifeDayPill: {
-    backgroundColor: colors.brand.butterSoft,
-    borderColor: colors.brand.accent,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-  },
-  lifeDayPillText: {
-    color: colors.text.secondary,
+  heroSubtitle: {
+    color: paperColors.ink1,
+    fontFamily: paperFonts.handBold,
     fontSize: 12,
-    fontWeight: typography.label.fontWeight,
+    lineHeight: 17,
+    marginTop: 2,
   },
-  shareCard: {
-    backgroundColor: colors.bg.warm,
-    borderColor: colors.line.warm,
-    gap: spacing.md,
+  heroTitle: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 27,
+    lineHeight: 33,
+    marginTop: 2,
   },
-  tagManageCard: {
-    gap: spacing.md,
-  },
-  shareCardHeader: {
-    alignItems: 'flex-start',
+  heroTop: {
+    alignItems: 'center',
     flexDirection: 'row',
-    gap: spacing.md,
+    gap: 12,
     justifyContent: 'space-between',
   },
-  shareCardCopy: {
-    flex: 1,
-    gap: spacing.xs,
-  },
-  shareCardTitle: {
-    color: colors.text.primary,
-    fontSize: typography.title.fontSize,
-    fontWeight: typography.title.fontWeight,
-    lineHeight: typography.title.lineHeight,
-  },
-  shareCardDescription: {
-    color: colors.text.secondary,
-    fontSize: typography.body.fontSize,
-    lineHeight: typography.body.lineHeight,
-  },
-  statusChip: {
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-  },
-  statusChipLocked: {
-    backgroundColor: colors.badge.neutral,
-  },
-  statusChipReady: {
-    backgroundColor: colors.brand.secondarySoft,
-  },
-  statusChipArchive: {
-    backgroundColor: colors.brand.primarySoft,
-  },
-  statusChipText: {
-    color: colors.text.primary,
-    fontSize: 12,
-    fontWeight: typography.label.fontWeight,
-  },
-  shareMetricsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-  },
-  metricBox: {
-    backgroundColor: colors.surface.raised,
-    borderColor: colors.line.warm,
-    borderRadius: radius.input,
-    borderWidth: 1,
-    flex: 1,
-    gap: spacing.xxs,
-    minWidth: 140,
-    padding: spacing.md,
-  },
-  metricLabel: {
-    color: colors.text.tertiary,
-    fontSize: 12,
-    fontWeight: typography.label.fontWeight,
-  },
-  metricValue: {
-    color: colors.text.primary,
-    fontSize: typography.body.fontSize,
-    fontWeight: typography.bodyStrong.fontWeight,
-    lineHeight: typography.body.lineHeight,
-  },
-  snapshotBanner: {
+  heroActions: {
     alignItems: 'center',
-    backgroundColor: colors.brand.butterSoft,
-    borderColor: colors.line.warm,
-    borderWidth: 1,
-    borderRadius: radius.input,
     flexDirection: 'row',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    flexWrap: 'wrap',
+    gap: 10,
+    justifyContent: 'space-between',
   },
-  snapshotCopy: {
+  loadingText: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 15,
+  },
+  manageCard: {
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    gap: 10,
+    marginTop: 6,
+    padding: 16,
+    position: 'relative',
+    ...paperShadow,
+  },
+  manageDescription: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  manageTitle: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 20,
+    lineHeight: 25,
+  },
+  memberCheck: {
+    bottom: -7,
+    color: paperColors.coral,
+    fontFamily: paperFonts.pen,
+    fontSize: 21,
+    lineHeight: 24,
+    position: 'absolute',
+    right: -5,
+    transform: [{ rotate: '-10deg' }],
+  },
+  memberDot: {
+    alignItems: 'center',
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    height: 44,
+    justifyContent: 'center',
+    position: 'relative',
+    width: 44,
+  },
+  memberDotCell: {
+    alignItems: 'center',
     flex: 1,
-    gap: spacing.xxs,
+    gap: 3,
   },
-  snapshotTitle: {
-    color: colors.text.primary,
-    fontSize: typography.label.fontSize,
-    fontWeight: typography.bodyStrong.fontWeight,
+  memberDotText: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.pen,
+    fontSize: 21,
+    lineHeight: 24,
   },
-  snapshotDescription: {
-    color: colors.text.secondary,
-    fontSize: 12,
-    lineHeight: 16,
-  },
-  tagPicker: {
-    marginHorizontal: -spacing.lg,
-  },
-  tagPillRow: {
+  memberDots: {
     flexDirection: 'row',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
+    gap: 10,
   },
-  tagPill: {
-    borderRadius: radius.input,
-    borderWidth: 1,
-    gap: spacing.xxs,
-    minWidth: 120,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+  memberName: {
+    color: paperColors.ink1,
+    fontFamily: paperFonts.handBold,
+    fontSize: 10,
+    lineHeight: 14,
+    maxWidth: 58,
   },
-  tagPillIdle: {
-    backgroundColor: colors.surface.primary,
-    borderColor: colors.line.soft,
+  paperButton: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: paperColors.ink0,
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 1.3,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
   },
-  tagPillSelected: {
-    backgroundColor: colors.brand.primarySoft,
-    borderColor: colors.brand.primary,
+  paperButtonText: {
+    color: paperColors.card,
+    fontFamily: paperFonts.handBold,
+    fontSize: 13,
+    lineHeight: 17,
   },
-  tagPillTitle: {
-    color: colors.text.primary,
-    fontSize: typography.label.fontSize,
-    fontWeight: typography.bodyStrong.fontWeight,
+  polaroidFeed: {
+    gap: 22,
+    paddingTop: 6,
   },
-  tagPillTitleSelected: {
-    color: colors.brand.primary,
+  screen: {
+    backgroundColor: paperColors.paper0,
+    flex: 1,
   },
-  tagPillMeta: {
-    color: colors.text.secondary,
-    fontSize: 12,
-    fontWeight: typography.label.fontWeight,
+  secondaryButton: {
+    backgroundColor: 'transparent',
   },
-  tagPillMetaSelected: {
-    color: colors.text.primary,
+  secondaryButtonText: {
+    color: paperColors.ink0,
   },
-  feedIntroCard: {
-    gap: spacing.sm,
+  settingsButton: {
+    alignItems: 'center',
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 1.3,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
   },
-  feedTitle: {
-    color: colors.text.primary,
-    fontSize: typography.title.fontSize,
-    fontWeight: typography.title.fontWeight,
-    lineHeight: typography.title.lineHeight,
+  shareTopButton: {
+    backgroundColor: paperColors.card,
   },
-  feedDescription: {
-    color: colors.text.secondary,
-    fontSize: typography.body.fontSize,
-    lineHeight: typography.body.lineHeight,
+  storyInlineMeta: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 11,
+    lineHeight: 15,
   },
-  inlineActions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-  },
-  memberGrid: {
+  tagCreator: {
+    alignItems: 'center',
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.sm,
+    gap: 10,
   },
-  memberGridItem: {
-    minWidth: '47%',
-    width: '47%',
+  tagRail: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingBottom: 4,
   },
-  archiveHintCard: {
-    gap: spacing.sm,
+  tagRailWrap: {
+    marginHorizontal: -16,
+    paddingHorizontal: 16,
   },
-  archiveHintTitle: {
-    color: colors.text.primary,
-    fontSize: typography.title.fontSize,
-    fontWeight: typography.title.fontWeight,
-    lineHeight: typography.title.lineHeight,
+  textInput: {
+    backgroundColor: paperColors.paper1,
+    borderColor: paperColors.ink0,
+    borderRadius: 12,
+    borderWidth: 1.2,
+    color: paperColors.ink0,
+    flex: 1,
+    fontFamily: paperFonts.handBold,
+    fontSize: 15,
+    minWidth: 150,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
   },
-  archiveHintDescription: {
-    color: colors.text.secondary,
-    fontSize: typography.body.fontSize,
-    lineHeight: typography.body.lineHeight,
+  topBar: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 38,
+  },
+  topRightActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  topSpacer: {
+    width: 34,
+  },
+  topTitle: {
+    color: paperColors.ink0,
+    flex: 1,
+    fontFamily: paperFonts.pen,
+    fontSize: 25,
+    lineHeight: 31,
+  },
+  verifyButton: {
+    alignItems: 'center',
+    backgroundColor: paperColors.ink0,
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  verifyButtonText: {
+    color: paperColors.card,
+    fontFamily: paperFonts.handBold,
+    fontSize: 13,
+    lineHeight: 17,
   },
 });

@@ -1,48 +1,88 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useNavigation } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   Keyboard,
+  type KeyboardEvent,
+  Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { AppButton } from '@/components/ui/app-button';
-import { SoftCard } from '@/components/ui/soft-card';
-import { colors, radius, shadow, spacing, typography } from '@/constants/tokens';
+import {
+  Tape,
+  paperColors,
+  paperFonts,
+  paperShadow,
+} from '@/components/ui/paper-design';
+import { createGroup, joinGroupByInviteCode } from '@/lib/supabase';
 import { useAppSession } from '@/providers/app-session-provider';
-import { createGroup, joinGroupByInviteCode, type GroupRow } from '@/lib/supabase';
+import { useFontPreference } from '@/providers/font-preference-provider';
 
 type Mode = 'menu' | 'create' | 'join';
-type ThresholdOption = GroupRow['threshold_rule'];
-
-const thresholdOptions: { value: ThresholdOption; label: string; desc: string }[] = [
-  { value: 'ALL', label: '전원', desc: '모든 멤버가 인증해야 언락' },
-  { value: 'N_MINUS_1', label: 'N-1', desc: '한 명 빠져도 언락' },
-  { value: 'N_MINUS_2', label: 'N-2', desc: '두 명까지 빠져도 언락' },
-];
 
 export default function GroupEntryScreen() {
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const { userId } = useAppSession();
+  const { bodyTextStyle, strongTextStyle } = useFontPreference();
+  const keyboardOffset = useRef(new Animated.Value(0)).current;
   const [mode, setMode] = useState<Mode>('menu');
   const [loading, setLoading] = useState(false);
-
-  // 생성 폼
   const [groupName, setGroupName] = useState('');
   const [groupDesc, setGroupDesc] = useState('');
-  const [threshold, setThreshold] = useState<ThresholdOption>('N_MINUS_1');
-
-  // 참여 폼
   const [inviteCode, setInviteCode] = useState('');
+  const [showThresholdGuide, setShowThresholdGuide] = useState(false);
+
+  useEffect(() => {
+    function moveSheet(event: KeyboardEvent) {
+      const bottomInset = Math.max(insets.bottom, 0);
+      const nextOffset = -Math.min(Math.max(event.endCoordinates.height - bottomInset + 18, 0), 280);
+
+      Animated.timing(keyboardOffset, {
+        duration: event.duration || 240,
+        easing: Easing.out(Easing.cubic),
+        toValue: nextOffset,
+        useNativeDriver: true,
+      }).start();
+    }
+
+    function resetSheet(event?: KeyboardEvent) {
+      Animated.timing(keyboardOffset, {
+        duration: event?.duration || 220,
+        easing: Easing.out(Easing.cubic),
+        toValue: 0,
+        useNativeDriver: true,
+      }).start();
+    }
+
+    const showListener = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      moveSheet,
+    );
+    const hideListener = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      resetSheet,
+    );
+
+    return () => {
+      showListener.remove();
+      hideListener.remove();
+    };
+  }, [insets.bottom, keyboardOffset]);
 
   const handleClose = useCallback(() => {
+    Keyboard.dismiss();
+
     if (navigation.canGoBack()) {
       router.back();
       return;
@@ -52,344 +92,399 @@ export default function GroupEntryScreen() {
   }, [navigation]);
 
   const handleCreate = useCallback(async () => {
-    if (!groupName.trim() || !userId) return;
+    const name = groupName.trim();
+
+    if (!name || !userId || loading) {
+      return;
+    }
 
     Keyboard.dismiss();
     setLoading(true);
 
     try {
       const group = await createGroup({
-        name: groupName.trim(),
-        description: groupDesc.trim() || undefined,
-        thresholdRule: threshold,
         createdBy: userId,
+        description: groupDesc.trim() || undefined,
+        name,
+        thresholdRule: 'ALL',
       });
 
-      Alert.alert('그룹 생성 완료!', `"${group.name}" 그룹이 만들어졌어요.`, [
-        { text: '확인', onPress: () => router.replace(`/groups/${group.id}`) },
+      Alert.alert('그룹 만들었어', `"${group.name}"에서 같이 인증할 수 있어요.`, [
+        { onPress: () => router.replace(`/groups/${group.id}`), text: '확인' },
       ]);
-    } catch (err: any) {
-      Alert.alert('생성 실패', err?.message ?? '알 수 없는 오류');
+    } catch (error) {
+      Alert.alert(
+        '그룹을 만들지 못했어요',
+        error instanceof Error ? error.message : '잠시 후 다시 시도해주세요.',
+      );
     } finally {
       setLoading(false);
     }
-  }, [groupName, groupDesc, threshold, userId]);
+  }, [groupDesc, groupName, loading, userId]);
 
   const handleJoin = useCallback(async () => {
-    if (!inviteCode.trim() || !userId) return;
+    const code = inviteCode.trim();
+
+    if (!code || !userId || loading) {
+      return;
+    }
 
     Keyboard.dismiss();
     setLoading(true);
 
     try {
-      const result = await joinGroupByInviteCode(inviteCode.trim(), userId);
-      Alert.alert('참여 완료!', `"${result.groupName}" 그룹에 참여했어요.`, [
-        { text: '확인', onPress: () => router.replace(`/groups/${result.groupId}`) },
+      const result = await joinGroupByInviteCode(code, userId);
+      Alert.alert('그룹에 들어갔어', `"${result.groupName}"에 참여했어요.`, [
+        { onPress: () => router.replace(`/groups/${result.groupId}`), text: '확인' },
       ]);
-    } catch (err: any) {
-      Alert.alert('참여 실패', err?.message ?? '알 수 없는 오류');
+    } catch (error) {
+      Alert.alert(
+        '참여하지 못했어요',
+        error instanceof Error ? error.message : '초대 코드를 다시 확인해주세요.',
+      );
     } finally {
       setLoading(false);
     }
-  }, [inviteCode, userId]);
+  }, [inviteCode, loading, userId]);
 
   return (
     <View style={styles.overlay}>
       <Pressable accessibilityLabel="닫기" onPress={handleClose} style={StyleSheet.absoluteFill} />
-      <View style={styles.sheetWrap}>
-        <SoftCard style={styles.sheet} variant="empty">
-          {/* 헤더 */}
+      <Animated.View
+        style={[
+          styles.sheetWrap,
+          {
+            paddingBottom: Math.max(insets.bottom, 12) + 10,
+            transform: [{ translateY: keyboardOffset }],
+          },
+        ]}>
+        <Tape angle={-5} left={42} top={2} width={86} />
+        <View style={styles.sheet}>
           <View style={styles.headerRow}>
             <View style={styles.headerCopy}>
-              <Text style={styles.eyebrow}>
-                {mode === 'menu' ? 'Team setup' : mode === 'create' ? '새 그룹' : '그룹 참여'}
+              <Text style={[styles.eyebrow, bodyTextStyle]}>
+                {mode === 'menu' ? '같이 하기' : mode === 'create' ? '새 그룹' : '초대장'}
               </Text>
-              <Text style={styles.title}>
-                {mode === 'menu' ? '같이 인증할 공간 만들기' : mode === 'create' ? '그룹 만들기' : '초대 코드 입력'}
+              <Text style={[styles.title, strongTextStyle]}>
+                {mode === 'menu' ? '그룹을 어떻게 시작할까?' : mode === 'create' ? '그룹 만들기' : '초대 코드'}
               </Text>
             </View>
             {mode !== 'menu' ? (
-              <TouchableOpacity
-                accessibilityLabel="뒤로"
-                activeOpacity={0.7}
-                onPress={() => setMode('menu')}
-                style={styles.backButton}
-              >
-                <Ionicons color={colors.text.secondary} name="arrow-back" size={18} />
-              </TouchableOpacity>
+              <Pressable accessibilityLabel="뒤로" onPress={() => setMode('menu')} style={styles.iconButton}>
+                <Ionicons color={paperColors.ink0} name="chevron-back" size={21} />
+              </Pressable>
             ) : null}
-            <AppButton icon="close" label="닫기" onPress={handleClose} variant="secondary" />
+            <Pressable accessibilityLabel="닫기" onPress={handleClose} style={styles.iconButton}>
+              <Ionicons color={paperColors.ink0} name="close" size={21} />
+            </Pressable>
           </View>
 
-          {/* 메뉴 */}
-          {mode === 'menu' ? (
-            <View style={styles.optionList}>
-              <TouchableOpacity
-                accessibilityLabel="그룹 만들기"
-                accessibilityRole="button"
-                activeOpacity={0.7}
-                onPress={() => setMode('create')}
-                style={styles.optionItem}
-              >
-                <Ionicons color={colors.brand.primary} name="add-circle" size={24} />
-                <View style={styles.optionCopy}>
-                  <Text style={styles.optionTitle}>그룹 만들기</Text>
-                  <Text style={styles.optionDescription}>이름과 언락 기준을 정하고 친구를 초대해요</Text>
+          <ScrollView
+            contentContainerStyle={styles.content}
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'none'}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}>
+            {mode === 'menu' ? (
+              <View style={styles.optionList}>
+                <Pressable
+                  accessibilityLabel="그룹 만들기"
+                  accessibilityRole="button"
+                  onPress={() => setMode('create')}
+                  style={[styles.optionCard, { backgroundColor: paperColors.sage }]}>
+                  <View style={styles.optionIcon}>
+                    <Ionicons color={paperColors.ink0} name="add-outline" size={25} />
+                  </View>
+                  <View style={styles.optionCopy}>
+                    <Text style={[styles.optionTitle, strongTextStyle]}>그룹 만들기</Text>
+                    <Text style={[styles.optionText, bodyTextStyle]}>태그를 정하고 친구를 초대해요</Text>
+                  </View>
+                  <Ionicons color={paperColors.ink1} name="chevron-forward" size={18} />
+                </Pressable>
+
+                <Pressable
+                  accessibilityLabel="초대 코드로 참여"
+                  accessibilityRole="button"
+                  onPress={() => setMode('join')}
+                  style={[styles.optionCard, { backgroundColor: paperColors.peach }]}>
+                  <View style={styles.optionIcon}>
+                    <Ionicons color={paperColors.ink0} name="enter-outline" size={24} />
+                  </View>
+                  <View style={styles.optionCopy}>
+                    <Text style={[styles.optionTitle, strongTextStyle]}>초대 코드로 참여</Text>
+                    <Text style={[styles.optionText, bodyTextStyle]}>받은 코드를 넣고 바로 합류해요</Text>
+                  </View>
+                  <Ionicons color={paperColors.ink1} name="chevron-forward" size={18} />
+                </Pressable>
+              </View>
+            ) : null}
+
+            {mode === 'create' ? (
+              <View style={styles.form}>
+                <View style={styles.inputGroup}>
+                  <Text style={[styles.inputLabel, bodyTextStyle]}>이름</Text>
+                  <TextInput
+                    autoFocus
+                    editable={!loading}
+                    maxLength={30}
+                    onChangeText={setGroupName}
+                    placeholder="새벽 운동팟"
+                    placeholderTextColor={paperColors.ink3}
+                    style={[styles.textInput, strongTextStyle]}
+                    value={groupName}
+                  />
                 </View>
-                <Ionicons color={colors.text.tertiary} name="chevron-forward" size={18} />
-              </TouchableOpacity>
 
-              <TouchableOpacity
-                accessibilityLabel="초대 코드로 참여"
-                accessibilityRole="button"
-                activeOpacity={0.7}
-                onPress={() => setMode('join')}
-                style={styles.optionItem}
-              >
-                <Ionicons color={colors.brand.secondary} name="enter" size={24} />
-                <View style={styles.optionCopy}>
-                  <Text style={styles.optionTitle}>초대 코드로 참여</Text>
-                  <Text style={styles.optionDescription}>친구에게 받은 코드를 입력하고 바로 합류해요</Text>
+                <View style={styles.inputGroup}>
+                  <Text style={[styles.inputLabel, bodyTextStyle]}>한 줄 메모</Text>
+                  <TextInput
+                    editable={!loading}
+                    maxLength={100}
+                    multiline
+                    onChangeText={setGroupDesc}
+                    placeholder="함께 지킬 약속을 적어줘"
+                    placeholderTextColor={paperColors.ink3}
+                    style={[styles.textInput, styles.textArea, strongTextStyle]}
+                    value={groupDesc}
+                  />
                 </View>
-                <Ionicons color={colors.text.tertiary} name="chevron-forward" size={18} />
-              </TouchableOpacity>
-            </View>
-          ) : null}
 
-          {/* 생성 폼 */}
-          {mode === 'create' ? (
-            <View style={styles.formSection}>
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>그룹 이름 *</Text>
-                <TextInput
-                  autoFocus
-                  maxLength={30}
-                  onChangeText={setGroupName}
-                  placeholder="예: 새벽 운동팟"
-                  placeholderTextColor={colors.text.tertiary}
-                  style={styles.textInput}
-                  value={groupName}
-                />
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>설명 (선택)</Text>
-                <TextInput
-                  maxLength={100}
-                  multiline
-                  numberOfLines={2}
-                  onChangeText={setGroupDesc}
-                  placeholder="그룹에 대한 한 줄 소개"
-                  placeholderTextColor={colors.text.tertiary}
-                  style={[styles.textInput, styles.textArea]}
-                  value={groupDesc}
-                />
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>임계값 규칙</Text>
-                <View style={styles.thresholdRow}>
-                  {thresholdOptions.map((opt) => (
-                    <TouchableOpacity
-                      accessibilityLabel={opt.label}
-                      activeOpacity={0.7}
-                      key={opt.value}
-                      onPress={() => setThreshold(opt.value)}
-                      style={[
-                        styles.thresholdChip,
-                        threshold === opt.value && styles.thresholdChipSelected,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.thresholdChipLabel,
-                          threshold === opt.value && styles.thresholdChipLabelSelected,
-                        ]}
-                      >
-                        {opt.label}
-                      </Text>
-                      <Text style={styles.thresholdChipDesc}>{opt.desc}</Text>
-                    </TouchableOpacity>
-                  ))}
+                <View style={styles.thresholdGuideRow}>
+                  <Text style={[styles.inputLabel, bodyTextStyle]}>인증 기준</Text>
+                  <Pressable
+                    accessibilityLabel="인증 기준 안내"
+                    accessibilityRole="button"
+                    onPress={() => setShowThresholdGuide((value) => !value)}
+                    style={styles.infoButton}>
+                    <Ionicons color={paperColors.ink1} name="information-circle-outline" size={20} />
+                  </Pressable>
                 </View>
+                {showThresholdGuide ? (
+                  <View style={styles.infoNote}>
+                    <Text style={[styles.infoNoteTitle, strongTextStyle]}>처음에는 모두 인증으로 시작해요</Text>
+                    <Text style={[styles.infoNoteText, bodyTextStyle]}>
+                      그룹 설정에서 멤버 수에 맞춰 기준, 태그, 초대 코드를 바꿀 수 있어요.
+                    </Text>
+                  </View>
+                ) : null}
+
+                <Pressable
+                  disabled={!groupName.trim() || loading}
+                  onPress={() => void handleCreate()}
+                  style={[styles.primaryButton, (!groupName.trim() || loading) && styles.disabledButton]}>
+                  {loading ? <ActivityIndicator color={paperColors.card} /> : null}
+                  <Text style={[styles.primaryButtonText, strongTextStyle]}>{loading ? '만드는 중' : '그룹 만들기'}</Text>
+                </Pressable>
               </View>
+            ) : null}
 
-              <AppButton
-                disabled={!groupName.trim() || loading}
-                label={loading ? '생성 중…' : '그룹 만들기'}
-                onPress={handleCreate}
-              />
-            </View>
-          ) : null}
+            {mode === 'join' ? (
+              <View style={styles.form}>
+                <View style={styles.inputGroup}>
+                  <Text style={[styles.inputLabel, bodyTextStyle]}>초대 코드</Text>
+                  <TextInput
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    autoFocus
+                    editable={!loading}
+                    maxLength={24}
+                    onChangeText={setInviteCode}
+                    placeholder="a3f2b1c9e0d4"
+                    placeholderTextColor={paperColors.ink3}
+                    style={[styles.textInput, strongTextStyle]}
+                    value={inviteCode}
+                  />
+                </View>
 
-          {/* 참여 폼 */}
-          {mode === 'join' ? (
-            <View style={styles.formSection}>
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>초대 코드</Text>
-                <TextInput
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  autoFocus
-                  maxLength={20}
-                  onChangeText={setInviteCode}
-                  placeholder="예: a3f2b1c9e0d4"
-                  placeholderTextColor={colors.text.tertiary}
-                  style={styles.textInput}
-                  value={inviteCode}
-                />
+                <Pressable
+                  disabled={!inviteCode.trim() || loading}
+                  onPress={() => void handleJoin()}
+                  style={[styles.primaryButton, (!inviteCode.trim() || loading) && styles.disabledButton]}>
+                  {loading ? <ActivityIndicator color={paperColors.card} /> : null}
+                  <Text style={[styles.primaryButtonText, strongTextStyle]}>{loading ? '참여 중' : '그룹 참여하기'}</Text>
+                </Pressable>
               </View>
-
-              <AppButton
-                disabled={!inviteCode.trim() || loading}
-                label={loading ? '참여 중…' : '그룹 참여하기'}
-                onPress={handleJoin}
-              />
-            </View>
-          ) : null}
-
-          {loading ? (
-            <ActivityIndicator color={colors.brand.primary} style={styles.loader} />
-          ) : null}
-        </SoftCard>
-      </View>
+            ) : null}
+          </ScrollView>
+        </View>
+      </Animated.View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    backgroundColor: colors.bg.overlay,
+  content: {
+    paddingTop: 14,
+  },
+  disabledButton: {
+    opacity: 0.45,
+  },
+  eyebrow: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.pen,
+    fontSize: 18,
+    lineHeight: 22,
+  },
+  form: {
+    gap: 14,
+  },
+  headerCopy: {
     flex: 1,
-    justifyContent: 'flex-end',
-  },
-  sheetWrap: {
-    padding: spacing.md,
-  },
-  sheet: {
-    backgroundColor: colors.bg.warm,
-    borderColor: colors.line.warm,
-    borderBottomLeftRadius: 0,
-    borderBottomRightRadius: 0,
-    gap: spacing.lg,
-    paddingBottom: spacing.xl,
-    ...shadow.sheet,
   },
   headerRow: {
     alignItems: 'flex-start',
     flexDirection: 'row',
-    gap: spacing.md,
-    justifyContent: 'space-between',
+    gap: 8,
   },
-  headerCopy: {
-    flex: 1,
-    gap: spacing.xs,
-  },
-  eyebrow: {
-    color: colors.brand.accent,
-    fontSize: typography.eyebrow.fontSize,
-    fontWeight: typography.eyebrow.fontWeight,
-    lineHeight: typography.eyebrow.lineHeight,
-    textTransform: 'uppercase',
-  },
-  title: {
-    color: colors.text.primary,
-    fontSize: typography.title.fontSize,
-    fontWeight: typography.title.fontWeight,
-    lineHeight: typography.title.lineHeight,
-  },
-  backButton: {
+  iconButton: {
     alignItems: 'center',
-    backgroundColor: colors.surface.tertiary,
-    borderRadius: radius.pill,
     height: 36,
     justifyContent: 'center',
     width: 36,
   },
-
-  // 메뉴
-  optionList: {
-    gap: spacing.sm,
+  infoNote: {
+    backgroundColor: paperColors.butter,
+    borderColor: paperColors.ink0,
+    borderRadius: 12,
+    borderStyle: 'dashed',
+    borderWidth: 1.2,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
   },
-  optionItem: {
+  infoNoteText: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 3,
+  },
+  infoNoteTitle: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 14,
+    lineHeight: 18,
+  },
+  inputGroup: {
+    gap: 6,
+  },
+  inputLabel: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  infoButton: {
     alignItems: 'center',
-    backgroundColor: colors.surface.raised,
-    borderColor: colors.line.warm,
-    borderRadius: radius.input,
-    borderWidth: 1,
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
+  optionCard: {
+    alignItems: 'center',
+    borderColor: paperColors.ink0,
+    borderRadius: 16,
+    borderWidth: 1.5,
     flexDirection: 'row',
-    gap: spacing.md,
-    padding: spacing.md,
+    gap: 12,
+    paddingHorizontal: 13,
+    paddingVertical: 13,
   },
   optionCopy: {
     flex: 1,
-    gap: spacing.xxs,
+    minWidth: 0,
+  },
+  optionIcon: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(253,251,245,0.58)',
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 1.2,
+    height: 42,
+    justifyContent: 'center',
+    width: 42,
+  },
+  optionList: {
+    gap: 10,
+  },
+  optionText: {
+    color: paperColors.ink2,
+    fontFamily: paperFonts.handBold,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 2,
   },
   optionTitle: {
-    color: colors.text.primary,
-    fontSize: typography.body.fontSize,
-    fontWeight: typography.bodyStrong.fontWeight,
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 17,
+    lineHeight: 22,
   },
-  optionDescription: {
-    color: colors.text.secondary,
-    fontSize: typography.label.fontSize,
-    lineHeight: 18,
+  overlay: {
+    backgroundColor: 'rgba(31,27,20,0.32)',
+    flex: 1,
+    justifyContent: 'flex-end',
   },
-
-  // 폼
-  formSection: {
-    gap: spacing.md,
+  primaryButton: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    backgroundColor: paperColors.ink0,
+    borderColor: paperColors.ink0,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+    minHeight: 50,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
-  inputGroup: {
-    gap: spacing.xs,
+  primaryButtonText: {
+    color: paperColors.card,
+    fontFamily: paperFonts.handBold,
+    fontSize: 15,
+    lineHeight: 20,
   },
-  inputLabel: {
-    color: colors.text.secondary,
-    fontSize: typography.label.fontSize,
-    fontWeight: typography.label.fontWeight,
+  sheet: {
+    backgroundColor: paperColors.paper0,
+    borderColor: paperColors.ink0,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    maxHeight: 560,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 20,
+    ...paperShadow,
   },
-  textInput: {
-    backgroundColor: colors.surface.raised,
-    borderColor: colors.line.warm,
-    borderRadius: radius.input,
-    borderWidth: 1,
-    color: colors.text.primary,
-    fontSize: typography.body.fontSize,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+  sheetWrap: {
+    paddingHorizontal: 14,
+    position: 'relative',
+  },
+  thresholdGuideRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: -2,
   },
   textArea: {
-    minHeight: 64,
+    minHeight: 78,
     textAlignVertical: 'top',
   },
-  thresholdRow: {
-    gap: spacing.xs,
+  textInput: {
+    backgroundColor: paperColors.card,
+    borderColor: paperColors.ink0,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 15,
+    lineHeight: 20,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
   },
-  thresholdChip: {
-    backgroundColor: colors.surface.raised,
-    borderColor: colors.line.soft,
-    borderRadius: radius.input,
-    borderWidth: 1,
-    gap: spacing.xxs,
-    padding: spacing.sm,
-  },
-  thresholdChipSelected: {
-    backgroundColor: colors.brand.butterSoft,
-    borderColor: colors.brand.accent,
-  },
-  thresholdChipLabel: {
-    color: colors.text.primary,
-    fontSize: typography.label.fontSize,
-    fontWeight: typography.bodyStrong.fontWeight,
-  },
-  thresholdChipLabelSelected: {
-    color: colors.text.primary,
-  },
-  thresholdChipDesc: {
-    color: colors.text.secondary,
-    fontSize: 12,
-  },
-  loader: {
-    marginTop: spacing.sm,
+  title: {
+    color: paperColors.ink0,
+    fontFamily: paperFonts.handBold,
+    fontSize: 24,
+    lineHeight: 30,
+    marginTop: 2,
   },
 });

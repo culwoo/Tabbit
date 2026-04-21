@@ -122,8 +122,9 @@ export function subscribeToThresholdChanges(
   groupId: string,
   onUpdate: (state: ThresholdStateRow) => void,
 ) {
+  const channelName = `thresholds:${groupId}-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
   const channel = db()
-    .channel(`thresholds:${groupId}`)
+    .channel(channelName)
     .on(
       'postgres_changes',
       {
@@ -141,6 +142,6 @@ export function subscribeToThresholdChanges(
     .subscribe();
 
   return () => {
-    channel.unsubscribe();
+    db().removeChannel(channel);
   };
 }

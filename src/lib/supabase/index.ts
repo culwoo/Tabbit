@@ -11,6 +11,7 @@ export {
   syncGroupTagsToPersonalTags,
   fetchActiveGroupMemberCounts,
   createGroup,
+  updateGroupThresholdRule,
   joinGroupByInviteCode,
   addGroupTag,
   deleteGroupTag,
