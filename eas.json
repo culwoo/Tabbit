@@ -15,6 +15,17 @@
         "buildType": "apk"
       }
     },
+    "ios-simulator": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_APP_ENV": "development",
+        "EXPO_PUBLIC_ENABLE_CRASHLYTICS": "false"
+      },
+      "ios": {
+        "simulator": true
+      }
+    },
     "preview": {
       "distribution": "internal",
       "env": {

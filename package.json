@@ -16,6 +16,7 @@
     "doctor": "npx expo-doctor",
     "release:check": "npm run typecheck && npm run lint && npm test -- --runInBand && npm run doctor",
     "release:assets": "powershell -ExecutionPolicy Bypass -File ./scripts/generate-release-assets.ps1",
+    "build:dev:ios-simulator": "npx eas-cli build --profile ios-simulator --platform ios",
     "build:preview:android": "npx eas-cli build --profile preview --platform android",
     "test": "jest",
     "test:watch": "jest --watch",
